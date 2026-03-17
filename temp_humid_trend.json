@@ -36,10 +36,10 @@
 
   "temp": {
     "min_rows":  3,
-    "cont_rows": 2
+    "fill_rows": 2
   },
   "humid": {
     "min_rows":  3,
-    "cont_rows": 2
+    "fill_rows": 2
   }
 }
