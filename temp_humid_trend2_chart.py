@@ -106,9 +106,10 @@ def analyze_trends(values: list, min_rows: int, fill_rows: int) -> list:
                 i = j
         return result
 
-    # UP 사이 flat 채움
+    # UP/DOWN 각각 2회씩 실행 (1회로 이어지지 않는 구간을 2회차에 처리)
     filled = fill_flat_between("UP",   raw)
-    # DOWN 사이 flat 채움
+    filled = fill_flat_between("DOWN", filled)
+    filled = fill_flat_between("UP",   filled)
     filled = fill_flat_between("DOWN", filled)
 
     # ── Step4: min_rows 미만 구간 → "" (ignore) ─────────────
