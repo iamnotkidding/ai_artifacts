@@ -141,11 +141,17 @@ def count_groups(trends: list, direction: str) -> int:
 # ══════════════════════════════════════════════
 # 포맷 자동 인식
 # ══════════════════════════════════════════════
-def detect_format(filepath: str, formats: dict) -> str:
+def detect_format(filepath: str, formats: dict) -> tuple:
     """
-    첫 번째 시트 헤더를 읽어 formats 중 가장 일치하는 포맷 키 반환.
-    컬럼명은 정확히 일치하지 않아도 포함(부분 문자열)되면 일치로 처리.
-    대소문자 구분 없음.
+    첫 번째 시트 헤더를 읽어 formats 중 가장 일치하는 포맷 키와
+    실제 매칭된 컬럼 전체 이름을 반환.
+
+    반환: (fmt_key: str, matched: dict)
+      matched = {
+          "temp":  "실제 헤더 셀 값" or None,
+          "humid": "실제 헤더 셀 값" or None,
+      }
+    컬럼명 매칭: 부분 문자열 포함, 대소문자 무시.
     모두 불일치하면 formats 첫 번째 키 반환.
     """
     xl = win32com.client.DispatchEx("Excel.Application")
@@ -157,7 +163,8 @@ def detect_format(filepath: str, formats: dict) -> str:
         ur = ws.UsedRange
         last_col = ur.Column + ur.Columns.Count - 1
 
-        best_key, best_score = None, -1
+        best_key, best_score, best_headers_raw = None, -1, []
+
         for fmt_key, fmt in formats.items():
             header_row = int(fmt.get("header_row", 1))
             col_map    = fmt.get("columns", {})
@@ -169,22 +176,47 @@ def detect_format(filepath: str, formats: dict) -> str:
                 ws.Cells(header_row, 1),
                 ws.Cells(header_row, last_col)
             ).Value
-            headers = []
+            # 원본 헤더(대소문자 보존) 와 소문자 버전 함께 보관
+            headers_orig = []
+            headers_low  = []
             if hdr_raw:
                 for v in hdr_raw[0]:
-                    headers.append(str(v).strip().lower() if v is not None else "")
+                    orig = str(v).strip() if v is not None else ""
+                    headers_orig.append(orig)
+                    headers_low.append(orig.lower())
 
-            # 부분 문자열 포함 여부로 점수 계산
             score = 0
             for req in required:
-                if any(req in h or h in req for h in headers if h):
+                if any(req in h or h in req for h in headers_low if h):
                     score += 1
 
             if score > best_score:
                 best_score, best_key = score, fmt_key
+                best_headers_raw = headers_orig
 
         wb.Close(False)
-        return best_key if best_key else next(iter(formats))
+
+        if not best_key:
+            best_key = next(iter(formats))
+
+        # 선택된 포맷의 temp/humid config 명으로 실제 헤더명 매칭
+        fmt     = formats[best_key]
+        col_map = fmt.get("columns", {})
+        matched = {}
+        for role in ("temp", "humid"):
+            cfg_name = col_map.get(role, "").strip().lower()
+            if not cfg_name:
+                matched[role] = None
+                continue
+            found = None
+            for orig in best_headers_raw:
+                lo = orig.lower()
+                if cfg_name in lo or lo in cfg_name:
+                    found = orig
+                    break
+            matched[role] = found   # None 이면 못 찾은 것
+
+        return best_key, matched
     finally:
         xl.Quit()
 
@@ -771,15 +803,15 @@ class App(tk.Tk):
 
         def worker():
             try:
-                names   = get_sheet_names(path)
-                detected = detect_format(path, self.config_data["formats"])
-                self.after(0, lambda: self._on_load_done(path, names, detected))
+                names                = get_sheet_names(path)
+                detected, matched_cols = detect_format(path, self.config_data["formats"])
+                self.after(0, lambda: self._on_load_done(path, names, detected, matched_cols))
             except Exception as e:
                 self.after(0, lambda err=e: self._on_load_error(err))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_load_done(self, path, names, detected):
+    def _on_load_done(self, path, names, detected, matched_cols):
         self._set_running(False)
         if hasattr(self, "_hint_lbl") and self._hint_lbl.winfo_exists():
             self._hint_lbl.destroy()
@@ -788,24 +820,30 @@ class App(tk.Tk):
             self._sheet_rows.append(sr)
         self._log(f"로드 완료: {len(names)}개 시트 — " + ", ".join(names))
         try:
-            fmt     = self.config_data["formats"][detected]
-            col_map = fmt.get("columns", {})
-            t_col   = col_map.get("temp",  "")
-            h_col   = col_map.get("humid", "")
-
-            # fmt_info_var: 포맷 키 + 행 정보
+            fmt = self.config_data["formats"][detected]
             self.fmt_info_var.set(
                 f"[{detected}]  헤더={fmt['header_row']}행  "
                 f"데이터={fmt['data_start_row']}행")
             self._detected_fmt = detected
-
-            # 로그: 포맷 설명 + 인식된 온도/습도 컬럼명
             self._log(f"포맷 자동 인식: [{detected}] {fmt.get('description','')}")
-            self._log(f"  🌡 온도 컬럼: '{t_col}'")
-            self._log(f"  💧 습도 컬럼: '{h_col}'")
+
+            # 온도 컬럼
+            t_found = matched_cols.get("temp")
+            if t_found:
+                self._log(f"  🌡 온도 컬럼: '{t_found}'")
+            else:
+                self._log_error(f"  🌡 온도 컬럼: 찾을 수 없음 (config: '{fmt.get('columns',{}).get('temp','')}')")
+
+            # 습도 컬럼
+            h_found = matched_cols.get("humid")
+            if h_found:
+                self._log(f"  💧 습도 컬럼: '{h_found}'")
+            else:
+                self._log_error(f"  💧 습도 컬럼: 찾을 수 없음 (config: '{fmt.get('columns',{}).get('humid','')}')")
+
         except Exception as e:
             self.fmt_info_var.set("(인식 실패)")
-            self._log(f"포맷 인식 실패: {e}")
+            self._log_error(f"포맷 인식 실패: {e}")
 
     def _on_load_error(self, err):
         self._set_running(False)
@@ -892,6 +930,14 @@ class App(tk.Tk):
     def _log(self, msg):
         self.log_box.configure(state="normal")
         self.log_box.insert("end", msg + "\n")
+        self.log_box.see("end")
+        self.log_box.configure(state="disabled")
+
+    def _log_error(self, msg):
+        """빨간색으로 에러 메시지 출력"""
+        self.log_box.configure(state="normal")
+        self.log_box.insert("end", msg + "\n", "error")
+        self.log_box.tag_configure("error", foreground="#F38BA8")
         self.log_box.see("end")
         self.log_box.configure(state="disabled")
 
