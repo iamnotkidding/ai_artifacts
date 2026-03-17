@@ -400,8 +400,8 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
     def log(msg):
         if status_cb: status_cb(msg)
 
-    # 포맷 자동 인식
-    fmt_key = detect_format(filepath, config["formats"])
+    # 포맷 자동 인식 (반환값: (fmt_key, matched_cols) 튜플)
+    fmt_key, _ = detect_format(filepath, config["formats"])
     fmt            = config["formats"][fmt_key]
     header_row     = int(fmt["header_row"])
     data_start_row = int(fmt["data_start_row"])
