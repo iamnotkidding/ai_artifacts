@@ -41,17 +41,24 @@ def save_config(cfg: dict):
 # 추세 분석
 # ══════════════════════════════════════════════
 def analyze_trends(values: list, min_rows: int, min_val: float) -> list:
+    """
+    UP/DOWN 추세 분석.
+    노이즈 조건:
+      1) 값이 min_val 이하인 구간 전체
+      2) UP/DOWN 길이 < min_rows
+      3) flat(동일값) 길이 >= min_rows → 해당 구간 빈값, 앞뒤 방향 전파 차단
+    """
     n = len(values)
     if n == 0:
         return []
 
+    # Step1: 인접 비교 → UP / DOWN / "" (flat)
     raw = [""] * n
     for i in range(1, n):
         if   values[i] > values[i - 1]: raw[i] = "UP"
         elif values[i] < values[i - 1]: raw[i] = "DOWN"
-    for i in range(1, n):
-        if raw[i] == "": raw[i] = raw[i - 1]
 
+    # Step2: 연속 구간 추출
     segments, i = [], 0
     while i < n:
         d = raw[i]; j = i
@@ -60,27 +67,65 @@ def analyze_trends(values: list, min_rows: int, min_val: float) -> list:
 
     low_set = {k for k, v in enumerate(values) if v <= min_val}
 
-    def is_noise(si):
+    def seg_len(si): return segments[si][1] - segments[si][0] + 1
+    def seg_dir(si): return segments[si][2]
+
+    def is_low(si):
         s, e, _ = segments[si]
-        return all(k in low_set for k in range(s, e + 1)) or (e - s + 1) < min_rows
+        return all(k in low_set for k in range(s, e + 1))
 
-    resolved = [None] * len(segments)
+    def is_flat_barrier(si):
+        """동일값 구간이 min_rows 이상 → 방향 전파 차단"""
+        return seg_dir(si) == "" and seg_len(si) >= min_rows
+
+    def is_noise(si):
+        """짧은 UP/DOWN 또는 min_val 이하"""
+        if is_low(si): return True
+        d = seg_dir(si)
+        return d in ("UP", "DOWN") and seg_len(si) < min_rows
+
+    # Step3: 각 구간의 확정 방향 계산
+    #   flat barrier  → BARRIER 마커 (전파 차단점)
+    #   유효 UP/DOWN  → 해당 방향
+    #   노이즈/짧은flat → None (이웃으로부터 채울 예정)
+    BARRIER = "__BARRIER__"
+    resolved = []
     for si in range(len(segments)):
-        if not is_noise(si): resolved[si] = segments[si][2]
+        if is_flat_barrier(si):
+            resolved.append(BARRIER)
+        elif not is_noise(si) and seg_dir(si) in ("UP", "DOWN"):
+            resolved.append(seg_dir(si))
+        else:
+            resolved.append(None)
 
+    # Step4: 앞→뒤 전파
+    #   barrier를 만나면 전파값 리셋, None 구간은 현재 전파값으로 채움
     last = ""
     for si in range(len(segments)):
-        if resolved[si] is not None: last = resolved[si]
-        else: resolved[si] = last
+        if resolved[si] == BARRIER:
+            last = ""                    # 차단 — 이후 전파 초기화
+        elif resolved[si] is not None:
+            last = resolved[si]          # 유효 방향 갱신
+        else:
+            resolved[si] = last          # 노이즈 구간 채움
 
+    # Step5: 뒤→앞 전파 (앞에 유효 방향이 없었던 경우)
+    #   barrier를 만나면 역전파값 리셋
     nxt = ""
     for si in range(len(segments) - 1, -1, -1):
-        if not is_noise(si): nxt = segments[si][2]
-        elif resolved[si] == "": resolved[si] = nxt
+        if resolved[si] == BARRIER:
+            nxt = ""                     # 차단 — 역방향 전파 초기화
+        elif resolved[si] not in ("", None, BARRIER):
+            nxt = resolved[si]           # 유효 방향 갱신
+        elif resolved[si] == "":
+            resolved[si] = nxt           # 앞에 방향 없던 노이즈 채움
 
+    # Step6: BARRIER → 빈값 확정, 결과 배열 구성
     result = [""] * n
     for si, (s, e, _) in enumerate(segments):
-        for k in range(s, e + 1): result[k] = resolved[si] or ""
+        val = "" if resolved[si] == BARRIER else (resolved[si] or "")
+        for k in range(s, e + 1):
+            result[k] = val
     return result
 
 
@@ -88,13 +133,11 @@ def analyze_trends(values: list, min_rows: int, min_val: float) -> list:
 # WIN32 헬퍼
 # ══════════════════════════════════════════════
 def _xl_open(filepath: str, visible=False):
-    """Excel Application 열기 — 대용량 최적화 옵션 적용"""
-    xl = win32com.client.Dispatch("Excel.Application")
+    """Excel Application 열기 — DispatchEx로 독립 프로세스 실행"""
+    xl = win32com.client.DispatchEx("Excel.Application")
     xl.Visible        = False
     xl.DisplayAlerts  = False
     xl.ScreenUpdating = False
-    xl.EnableEvents   = False          # 이벤트 핸들러 비활성
-    xl.Calculation    = -4135          # xlCalculationManual: 자동계산 OFF
     wb = xl.Workbooks.Open(
         os.path.abspath(filepath),
         UpdateLinks=False,             # 외부 링크 갱신 안 함
@@ -270,17 +313,12 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
             if sheet_done:
                 processed.append(sheet_name)
 
-        # 저장 전 최적화 옵션 복원
-        xl.Calculation    = -4105   # xlCalculationAutomatic
-        xl.EnableEvents   = True
         xl.ScreenUpdating = True
         wb.Save()
         xl.Visible = True
         log(f"\n완료: {os.path.basename(filepath)}  ({len(processed)}개 시트)")
 
     except Exception as e:
-        xl.Calculation    = -4105
-        xl.EnableEvents   = True
         xl.ScreenUpdating = True
         wb.Close(False); xl.Quit(); raise e
 
