@@ -521,16 +521,16 @@ class SheetRow:
         self.enabled = tk.BooleanVar(value=True)
         self._result_var = tk.StringVar(value="")
 
+        r = row_idx + 1   # row=0은 헤더 행
         tk.Checkbutton(parent, variable=self.enabled, bg=bg, fg=fg,
                        selectcolor="#313244", activebackground=bg).grid(
-            row=row_idx, column=0, padx=(6, 2), sticky="w")
+            row=r, column=0, padx=(6, 2), sticky="w")
         tk.Label(parent, text=sheet_name, font=lf, bg=bg, fg=fg,
-                 width=20, anchor="w").grid(row=row_idx, column=1, padx=4, sticky="w")
+                 width=20, anchor="w").grid(row=r, column=1, padx=4, sticky="w")
         self._result_lbl = tk.Label(parent, textvariable=self._result_var,
                  font=("Consolas", 9), bg=bg, fg="#A6E3A1",
                  anchor="w")
-        self._result_lbl.grid(row=row_idx, column=2, padx=4, sticky="ew")
-        # 결과 컬럼(2)이 여분 공간을 모두 차지하도록
+        self._result_lbl.grid(row=r, column=2, padx=4, sticky="ew")
         parent.columnconfigure(2, weight=1)
 
     def set_result(self, t_up, t_down, h_up, h_down):
@@ -543,17 +543,7 @@ class SheetRow:
         self._result_lbl.after_idle(self._sync_header)
 
     def _sync_header(self):
-        """결과 레이블 렌더 완료 후 헤더 너비 동기화"""
-        self._result_lbl.update_idletasks()
-        w = self._result_lbl.winfo_reqwidth()
-        if w > 1:
-            parent = self._result_lbl.master
-            # 부모(sf)의 hf 참조를 앱 루트까지 올라가서 찾음
-            root = parent
-            while root and not isinstance(root, tk.Tk):
-                root = root.master
-            if root and hasattr(root, 'hf'):
-                root.hf.columnconfigure(2, minsize=w, weight=1)
+        pass   # sf와 헤더가 같은 grid이므로 자동 동기화
 
     def clear_result(self):
         self._result_var.set("")
@@ -635,18 +625,7 @@ class App(tk.Tk):
                  font=("Segoe UI", 10, "bold"),
                  bg=self.BG, fg="#A6E3A1").pack(pady=(0, 2))
 
-        self.hf = tk.Frame(self, bg=self.BG); self.hf.pack(fill="x", padx=P)
-        for col, txt, w in [(0,"적용",4),(1,"시트명",20),(2,"분석 결과",0)]:
-            lbl = tk.Label(self.hf, text=txt, font=("Segoe UI", 9, "bold"),
-                     bg="#313244", fg="#A6ADC8",
-                     padx=4, pady=2)
-            if w: lbl.configure(width=w)
-            lbl.grid(row=0, column=col, padx=2, pady=(0,2), sticky="w")
-            if col == 2:
-                self._hdr_result_lbl = lbl
-        self.hf.columnconfigure(2, weight=1)
-
-        self.canvas = tk.Canvas(self, bg=self.BG, highlightthickness=0, height=130)
+        self.canvas = tk.Canvas(self, bg=self.BG, highlightthickness=0, height=160)
         vsb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=vsb.set)
         self.canvas.pack(side="left", fill="both", expand=True, padx=(P, 0))
@@ -655,15 +634,24 @@ class App(tk.Tk):
         self.sf = tk.Frame(self.canvas, bg=self.BG)
         self._cw = self.canvas.create_window((0, 0), window=self.sf, anchor="nw")
         self.canvas.bind("<Configure>", self._on_canvas_resize)
-        # 캔버스 자체 휠 바인딩
         self.canvas.bind("<MouseWheel>", self._on_mousewheel)
         self.canvas.bind("<Button-4>",   self._on_mousewheel)
         self.canvas.bind("<Button-5>",   self._on_mousewheel)
-        # sf Configure: 스크롤 영역 갱신 + 하위 위젯 휠 바인딩
         self.sf.bind("<Configure>", self._on_sf_configure)
-        tk.Label(self.sf, text="← Excel 파일을 선택하면 시트 목록이 표시됩니다",
-                 font=self.LF, bg=self.BG, fg="#585B70").grid(
-            row=0, column=0, columnspan=2, pady=14)
+
+        # 헤더를 sf row=0에 배치 — 시트 행과 같은 grid, 컬럼 너비 자동 동기화
+        for col, txt, w in [(0,"적용",4),(1,"시트명",20),(2,"분석 결과",0)]:
+            lbl = tk.Label(self.sf, text=txt, font=("Segoe UI", 9, "bold"),
+                     bg="#313244", fg="#A6ADC8", padx=4, pady=2)
+            if w: lbl.configure(width=w)
+            lbl.grid(row=0, column=col, padx=2, pady=(0, 2),
+                     sticky="ew" if col == 2 else "w")
+        self.sf.columnconfigure(2, weight=1)
+
+        self._hint_lbl = tk.Label(
+            self.sf, text="← Excel 파일을 선택하면 시트 목록이 표시됩니다",
+            font=self.LF, bg=self.BG, fg="#585B70")
+        self._hint_lbl.grid(row=1, column=0, columnspan=3, pady=14)
 
         self._sep()
 
@@ -699,22 +687,9 @@ class App(tk.Tk):
         self.log_box.pack(fill="x", padx=P, pady=(0, P))
 
     def _on_sf_configure(self, event):
-        """sf 크기 변경 시: 스크롤 영역 갱신 + 하위 휠 바인딩 + 헤더 컬럼 동기화"""
+        """sf 크기 변경 시: 스크롤 영역 갱신 + 하위 휠 바인딩"""
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         self._bind_scroll(self.sf)
-        # 결과 레이블이 한 개 이상 있으면 실제 너비를 헤더에 반영
-        self.after_idle(self._sync_result_header)
-
-    def _sync_result_header(self):
-        """SheetRow 결과 레이블의 실제 너비를 헤더 컬럼 minsize에 반영"""
-        if not self._sheet_rows:
-            return
-        # 첫 번째 SheetRow의 결과 레이블 너비 측정
-        lbl = self._sheet_rows[0]._result_lbl
-        lbl.update_idletasks()
-        w = lbl.winfo_width()
-        if w > 1:
-            self.hf.columnconfigure(2, minsize=w, weight=1)
 
     def _on_canvas_resize(self, event):
         self.canvas.itemconfig(self._cw, width=event.width)
@@ -782,8 +757,15 @@ class App(tk.Tk):
         self._load_sheets(path)
 
     def _load_sheets(self, path):
-        for w in self.sf.winfo_children(): w.destroy()
+        for w in list(self.sf.winfo_children()):
+            info = w.grid_info()
+            if info and int(info.get("row", 0)) >= 1:
+                w.destroy()
         self._sheet_rows.clear()
+        self._hint_lbl = tk.Label(
+            self.sf, text="← Excel 파일을 선택하면 시트 목록이 표시됩니다",
+            font=self.LF, bg=self.BG, fg="#585B70")
+        self._hint_lbl.grid(row=1, column=0, columnspan=3, pady=14)
         self._log("시트 목록 로드 중 (win32)...")
         self._set_running(True)
 
@@ -799,6 +781,8 @@ class App(tk.Tk):
 
     def _on_load_done(self, path, names, detected):
         self._set_running(False)
+        if hasattr(self, "_hint_lbl") and self._hint_lbl.winfo_exists():
+            self._hint_lbl.destroy()
         for i, sname in enumerate(names):
             sr = SheetRow(self.sf, sname, self.BG, self.FG, self.LF, i)
             self._sheet_rows.append(sr)
