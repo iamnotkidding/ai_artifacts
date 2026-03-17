@@ -276,32 +276,50 @@ def read_sheet(filepath: str, sheet_name: str,
 
 def write_trend_col(ws, header_row: int, data_start_row: int,
                     col_name: str, trends: list):
-    """결과 컬럼을 값만 기록 (대용량 최적화: Range 일괄 쓰기)"""
-    ur       = ws.UsedRange
-    last_col = ur.Column + ur.Columns.Count - 1
+    """결과 컬럼을 값만 기록 (대용량 최적화: Range 일괄 쓰기)
 
-    # 기존 동일 헤더 컬럼 찾기 (헤더 행 일괄 읽기)
+    기존 col_name 헤더 컬럼 검색 범위:
+      - header_row 행의 A열(1)부터 실제 사용 열 끝까지 읽되
+      - UsedRange 컬럼 오프셋을 보정하여 정확한 절대 열 번호 사용
+    """
+    # UsedRange 절대 열 범위 계산 (UsedRange.Column은 1-based 절대 열)
+    ur          = ws.UsedRange
+    ur_first_col = ur.Column                            # 절대 열 시작
+    ur_last_col  = ur.Column + ur.Columns.Count - 1     # 절대 열 끝
+
+    # header_row 행 전체를 1열부터 ur_last_col까지 읽기
     hdr_range = ws.Range(ws.Cells(header_row, 1),
-                         ws.Cells(header_row, last_col))
+                         ws.Cells(header_row, ur_last_col))
     hdr_raw   = hdr_range.Value
-    headers   = [str(v).strip() if v is not None else ""
-                 for v in (hdr_raw[0] if hdr_raw else [])]
+    # Value는 행이 1개여도 2D 튜플((v1,v2,...),) 형태로 반환
+    if hdr_raw and isinstance(hdr_raw[0], tuple):
+        hdr_list = list(hdr_raw[0])
+    elif hdr_raw:
+        hdr_list = list(hdr_raw)
+    else:
+        hdr_list = []
+
+    headers = [str(v).strip() if v is not None else "" for v in hdr_list]
+
+    # col_name 과 정확히 일치하는 열 찾기 (1-based 절대 열)
     col = None
     for i, h in enumerate(headers):
         if h == col_name:
-            col = i + 1; break
+            col = i + 1   # headers 인덱스 → 1-based 절대 열
+            break
     if col is None:
-        col = last_col + 1
+        col = ur_last_col + 1   # 없으면 UsedRange 오른쪽 다음 열
 
     # 헤더 쓰기
     ws.Cells(header_row, col).Value = col_name
 
-    # 데이터 일괄 쓰기 — 2D 튜플로 Range.Value 에 한 번에 할당
-    data_2d = tuple((v,) for v in trends)
-    ws.Range(
-        ws.Cells(data_start_row, col),
-        ws.Cells(data_start_row + len(trends) - 1, col)
-    ).Value = data_2d
+    # 데이터 일괄 쓰기
+    if trends:
+        data_2d = tuple((v,) for v in trends)
+        ws.Range(
+            ws.Cells(data_start_row, col),
+            ws.Cells(data_start_row + len(trends) - 1, col)
+        ).Value = data_2d
 
 
 # ══════════════════════════════════════════════
@@ -521,6 +539,21 @@ class SheetRow:
         # UP 또는 DOWN 이 1개 이상이면 파란색, 모두 0이면 기본색
         has_result = (t_up + t_down + h_up + h_down) > 0
         self._result_lbl.configure(fg="#89B4FA" if has_result else "#585B70")
+        # 텍스트 변경 후 헤더 동기화 요청
+        self._result_lbl.after_idle(self._sync_header)
+
+    def _sync_header(self):
+        """결과 레이블 렌더 완료 후 헤더 너비 동기화"""
+        self._result_lbl.update_idletasks()
+        w = self._result_lbl.winfo_reqwidth()
+        if w > 1:
+            parent = self._result_lbl.master
+            # 부모(sf)의 hf 참조를 앱 루트까지 올라가서 찾음
+            root = parent
+            while root and not isinstance(root, tk.Tk):
+                root = root.master
+            if root and hasattr(root, 'hf'):
+                root.hf.columnconfigure(2, minsize=w, weight=1)
 
     def clear_result(self):
         self._result_var.set("")
@@ -602,15 +635,16 @@ class App(tk.Tk):
                  font=("Segoe UI", 10, "bold"),
                  bg=self.BG, fg="#A6E3A1").pack(pady=(0, 2))
 
-        hf = tk.Frame(self, bg=self.BG); hf.pack(fill="x", padx=P)
+        self.hf = tk.Frame(self, bg=self.BG); self.hf.pack(fill="x", padx=P)
         for col, txt, w in [(0,"적용",4),(1,"시트명",20),(2,"분석 결과",0)]:
-            lbl = tk.Label(hf, text=txt, font=("Segoe UI", 9, "bold"),
+            lbl = tk.Label(self.hf, text=txt, font=("Segoe UI", 9, "bold"),
                      bg="#313244", fg="#A6ADC8",
                      padx=4, pady=2)
             if w: lbl.configure(width=w)
-            # 분석 결과 헤더는 내용 크기에 맞추되 남는 공간 채움
             lbl.grid(row=0, column=col, padx=2, pady=(0,2), sticky="w")
-        hf.columnconfigure(2, weight=1)
+            if col == 2:
+                self._hdr_result_lbl = lbl
+        self.hf.columnconfigure(2, weight=1)
 
         self.canvas = tk.Canvas(self, bg=self.BG, highlightthickness=0, height=130)
         vsb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
@@ -626,10 +660,7 @@ class App(tk.Tk):
         self.canvas.bind("<Button-4>",   self._on_mousewheel)
         self.canvas.bind("<Button-5>",   self._on_mousewheel)
         # sf Configure: 스크롤 영역 갱신 + 하위 위젯 휠 바인딩
-        self.sf.bind("<Configure>",
-                     lambda e: (self.canvas.configure(
-                         scrollregion=self.canvas.bbox("all")),
-                         self._bind_scroll(self.sf)))
+        self.sf.bind("<Configure>", self._on_sf_configure)
         tk.Label(self.sf, text="← Excel 파일을 선택하면 시트 목록이 표시됩니다",
                  font=self.LF, bg=self.BG, fg="#585B70").grid(
             row=0, column=0, columnspan=2, pady=14)
@@ -666,6 +697,24 @@ class App(tk.Tk):
         self.log_box = tk.Text(self, height=8, bg="#181825", fg="#BAC2DE",
                                font=("Consolas", 9), relief="flat", state="disabled")
         self.log_box.pack(fill="x", padx=P, pady=(0, P))
+
+    def _on_sf_configure(self, event):
+        """sf 크기 변경 시: 스크롤 영역 갱신 + 하위 휠 바인딩 + 헤더 컬럼 동기화"""
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self._bind_scroll(self.sf)
+        # 결과 레이블이 한 개 이상 있으면 실제 너비를 헤더에 반영
+        self.after_idle(self._sync_result_header)
+
+    def _sync_result_header(self):
+        """SheetRow 결과 레이블의 실제 너비를 헤더 컬럼 minsize에 반영"""
+        if not self._sheet_rows:
+            return
+        # 첫 번째 SheetRow의 결과 레이블 너비 측정
+        lbl = self._sheet_rows[0]._result_lbl
+        lbl.update_idletasks()
+        w = lbl.winfo_width()
+        if w > 1:
+            self.hf.columnconfigure(2, minsize=w, weight=1)
 
     def _on_canvas_resize(self, event):
         self.canvas.itemconfig(self._cw, width=event.width)
