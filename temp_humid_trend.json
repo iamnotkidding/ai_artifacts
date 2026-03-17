@@ -1,6 +1,4 @@
 {
-  "input_format": "format1",
-
   "formats": {
     "format1": {
       "description": "Time, temp, humidity (헤더 1행, 데이터 2행~)",
@@ -37,9 +35,9 @@
   },
 
   "temp": {
-    "min_rows": 10
+    "min_rows": 3
   },
   "humid": {
-    "min_rows": 10
+    "min_rows": 3
   }
 }
