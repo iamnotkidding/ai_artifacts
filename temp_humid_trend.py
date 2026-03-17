@@ -19,7 +19,7 @@ import win32com.client
 # ══════════════════════════════════════════════
 # CONFIG
 # ══════════════════════════════════════════════
-CONFIG_FILE = "config.json"
+CONFIG_FILE = os.path.splitext(os.path.abspath(__file__))[0] + ".json"
 
 
 def load_config() -> dict:
