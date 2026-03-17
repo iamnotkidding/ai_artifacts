@@ -85,6 +85,57 @@ def analyze_trends(values: list, min_rows: int) -> list:
     return result
 
 
+
+# ══════════════════════════════════════════════
+# 포맷 자동 인식
+# ══════════════════════════════════════════════
+def detect_format(filepath: str, formats: dict) -> str:
+    """
+    첫 번째 시트 헤더를 읽어 formats 중 가장 일치하는 포맷 키 반환.
+    컬럼명은 정확히 일치하지 않아도 포함(부분 문자열)되면 일치로 처리.
+    대소문자 구분 없음.
+    모두 불일치하면 formats 첫 번째 키 반환.
+    """
+    xl = win32com.client.DispatchEx("Excel.Application")
+    xl.Visible = False; xl.DisplayAlerts = False; xl.ScreenUpdating = False
+    try:
+        wb = xl.Workbooks.Open(os.path.abspath(filepath),
+                               UpdateLinks=False, ReadOnly=True)
+        ws = wb.Sheets(1)
+        ur = ws.UsedRange
+        last_col = ur.Column + ur.Columns.Count - 1
+
+        best_key, best_score = None, -1
+        for fmt_key, fmt in formats.items():
+            header_row = int(fmt.get("header_row", 1))
+            col_map    = fmt.get("columns", {})
+            required   = [v.strip().lower() for v in col_map.values()
+                          if v and v.strip()]
+            if not required:
+                continue
+            hdr_raw = ws.Range(
+                ws.Cells(header_row, 1),
+                ws.Cells(header_row, last_col)
+            ).Value
+            headers = []
+            if hdr_raw:
+                for v in hdr_raw[0]:
+                    headers.append(str(v).strip().lower() if v is not None else "")
+
+            # 부분 문자열 포함 여부로 점수 계산
+            score = 0
+            for req in required:
+                if any(req in h or h in req for h in headers if h):
+                    score += 1
+
+            if score > best_score:
+                best_score, best_key = score, fmt_key
+
+        wb.Close(False)
+        return best_key if best_key else next(iter(formats))
+    finally:
+        xl.Quit()
+
 # ══════════════════════════════════════════════
 # WIN32 헬퍼
 # ══════════════════════════════════════════════
@@ -138,10 +189,13 @@ def read_sheet(filepath: str, sheet_name: str,
         ]
 
         def col_of(name: str) -> int:
-            name = name.strip()
+            """config 컬럼명이 헤더에 포함되거나 헤더가 config명에 포함되면 일치"""
+            name = name.strip().lower()
             if not name: return -1
             for i, h in enumerate(headers):
-                if h == name: return i + 1
+                hl = h.lower()
+                if name in hl or hl in name:
+                    return i + 1
             return -1
 
         t_ci = col_of(temp_col_name)
