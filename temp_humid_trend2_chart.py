@@ -1070,6 +1070,8 @@ class App(tk.Tk):
     def _browse(self):
         path = filedialog.askopenfilename(
             title="Excel 파일 선택",
+            initialdir=os.path.dirname(os.path.abspath(
+                sys.executable if getattr(sys, "frozen", False) else __file__)),
             filetypes=[("Excel files", "*.xlsx *.xlsm *.xls"), ("All files", "*.*")])
         if not path: return
         self.file_var.set(path)
