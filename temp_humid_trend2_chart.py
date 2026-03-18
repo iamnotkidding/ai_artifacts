@@ -470,11 +470,11 @@ def calc_rate_per_min(values: list, timestamps: list, trends: list) -> list:
 def make_updown_vals(values: list, trends: list) -> tuple:
     """
     UP/DOWN 값 컬럼 생성.
-    - up_vals  : trend가 UP이면 원본 값, 아니면 -1
-    - down_vals: trend가 DOWN이면 원본 값, 아니면 -1
+    - up_vals  : trend가 UP이면 원본 값, 아니면 "" (빈칸 → 차트에서 점 미표시)
+    - down_vals: trend가 DOWN이면 원본 값, 아니면 ""
     """
-    up_vals   = [v if t == "UP"   else -1 for v, t in zip(values, trends)]
-    down_vals = [v if t == "DOWN" else -1 for v, t in zip(values, trends)]
+    up_vals   = [v if t == "UP"   else "" for v, t in zip(values, trends)]
+    down_vals = [v if t == "DOWN" else "" for v, t in zip(values, trends)]
     return up_vals, down_vals
 
 
@@ -496,24 +496,28 @@ def add_chart(ws, xl_app,
     chart     = chart_obj.Chart
     chart.ChartType = -4169   # xlXYScatter
 
-    def add_series(name, x_col, y_col, color_rgb):
+    data_end = data_start_row + data_rows - 1
+
+    def add_series(name, x_col, y_col, color_rgb, marker_size=3):
         sr = chart.SeriesCollection().NewSeries()
         sr.Name = name
-        data_end = data_start_row + data_rows - 1
         sr.XValues = ws.Range(ws.Cells(data_start_row, x_col),
                               ws.Cells(data_end, x_col))
         sr.Values  = ws.Range(ws.Cells(data_start_row, y_col),
                               ws.Cells(data_end, y_col))
-        sr.Format.Line.Visible = 0          # 선 없음
-        sr.MarkerStyle = 2                  # xlMarkerStylePlus = 2 (작은 점)
-        sr.MarkerSize  = 3
-        sr.Format.Fill.ForeColor.RGB = color_rgb
-        sr.MarkerForegroundColor     = color_rgb
-        sr.MarkerBackgroundColor     = color_rgb
+        sr.Format.Line.Visible   = 0    # 선 없음
+        sr.MarkerStyle           = 2    # xlMarkerStylePlus
+        sr.MarkerSize            = marker_size
+        sr.MarkerForegroundColor = color_rgb
+        sr.MarkerBackgroundColor = color_rgb
 
-    add_series("원본",  time_col, val_col, 0x888888)   # 회색
-    add_series("UP",    time_col, up_col,  0x00AA44)   # 초록
-    add_series("DOWN",  time_col, dn_col,  0xCC2222)   # 빨강
+    # 원본 시리즈 먼저 추가 → Y축 범위가 실제 값 기준으로 설정됨
+    add_series("원본", time_col, val_col, 0xAAAAAA, marker_size=2)  # 연회색
+    add_series("UP",   time_col, up_col,  0x00AA44, marker_size=4)  # 초록
+    add_series("DOWN", time_col, dn_col,  0xCC2222, marker_size=4)  # 빨강
+
+    # 빈칸(빈 셀)은 보간하지 않고 건너뜀 (xlDisplayBlanksAs: 0=gaps)
+    chart.DisplayBlanksAs = 0
 
     chart.HasTitle = True
     chart.ChartTitle.Text = chart_title
