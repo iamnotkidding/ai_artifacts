@@ -5,19 +5,19 @@
       "header_row": 1,
       "data_start_row": 2,
       "columns": {
-        "time": "Time",
-        "temp": "temp",
+        "time":  "Time",
+        "temp":  "temp",
         "humid": "humidity"
       }
     },
     "format2": {
-      "description": "Date, Time, temp, humid (헤더 1행, 데이터 2행~, Date: yyyy/mm/dd)",
+      "description": "Date, Time, temp, humid (헤더 1행, 데이터 2행~)",
       "header_row": 1,
       "data_start_row": 2,
       "columns": {
-        "date": "Date",
-        "time": "Time",
-        "temp": "temp",
+        "date":  "Date",
+        "time":  "Time",
+        "temp":  "temp",
         "humid": "humid"
       }
     },
@@ -27,24 +27,19 @@
       "data_start_row": 2,
       "columns": {
         "index": "",
-        "time": "시각",
-        "temp": "TEMP",
+        "time":  "시각",
+        "temp":  "TEMP",
         "humid": "HUMI"
       }
     }
   },
+
   "temp": {
-    "max_fill_rows": 2,
-    "max_normal_rows": 0,
-    "min_rows": 3,
-    "min_rate_abs": 0.0,
-    "max_normal_rate_diff": 0.0
+    "min_rows":     3,
+    "min_rate_abs": 0.0
   },
   "humid": {
-    "max_fill_rows": 2,
-    "max_normal_rows": 0,
-    "min_rows": 3,
-    "min_rate_abs": 0.0,
-    "max_normal_rate_diff": 0.0
+    "min_rows":     3,
+    "min_rate_abs": 0.0
   }
 }
