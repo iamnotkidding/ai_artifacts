@@ -57,185 +57,152 @@ def analyze_trends(values: list, min_rows: int, max_fill_rows: int,
     """
     UP/DOWN 추세 분석.
 
-    처리 순서:
-      Step1: 인접 값 비교로 raw 방향 결정
-
-      Step2: max_fill_rows 처리 (변경 없을 때까지 반복)
-             같은 방향 구간 사이 flat("") 이 max_fill_rows 이하면 채움
-
-      Step3: max_normal_rows / max_normal_rate_diff 처리 (변경 없을 때까지 반복)
-             UP 구간 사이에 끼인 DOWN/flat 구간이 다음 중 하나를 만족하면 연결
-               - (max_normal_rows > 0) AND inner 길이 < max_normal_rows
-               - (max_normal_rate_diff > 0) AND 양쪽 변화율 차이 <= max_normal_rate_diff
-
-      Step4: min_rows 처리 (fill + normal 완료 후 적용)
-             연속 길이 < min_rows 인 구간을 "" 처리
-
-      Step5: min_rate_abs 처리 (마지막 단계)
-             UP/DOWN 구간의 평균 변화율 절대값 < min_rate_abs 이면 "" 처리
+    Step1: 인접 값 비교 → raw 방향 (정수 코드)
+    Step2: fill_rows  — 같은 방향 사이 flat 구간 채움 (수렴까지)
+    Step3: normalize  — outer 사이 inner 구간 연결 (수렴까지)
+    Step4: min_rows   — 짧은 구간 제거
+    Step5: min_rate_abs — 변화율 작은 구간 제거
     """
     n = len(values)
     if n == 0:
         return []
 
-    # ── Step1: 인접 비교로 raw 방향 ─────────────────────────
-    raw = [""] * n
+    # 타임스탬프 유효 범위 미리 계산
+    ts_len = len(timestamps) if timestamps else 0
+
+    def get_ts(i):
+        return timestamps[i] if i < ts_len else None
+
+    def minutes_between(i, j) -> float:
+        """인덱스 i~j 사이 시간(분). 없으면 None."""
+        ts_i = get_ts(i)
+        ts_j = get_ts(j)
+        if ts_i and ts_j and ts_j != ts_i:
+            dt = (ts_j - ts_i).total_seconds() / 60.0
+            return dt if dt != 0 else None
+        return None
+
+    # ── Step1: 인접 비교 → raw 방향 ─────────────────────────
+    # 1=UP, -1=DOWN, 0=flat
+    raw = [0] * n
     for i in range(1, n):
-        if   values[i] > values[i - 1]: raw[i] = "UP"
-        elif values[i] < values[i - 1]: raw[i] = "DOWN"
+        if   values[i] > values[i - 1]: raw[i] =  1
+        elif values[i] < values[i - 1]: raw[i] = -1
 
-    # ── Step2: max_fill_rows 처리 (변경 없을 때까지 반복) ───────
-    def fill_flat_between(direction: str, data: list) -> list:
-        """같은 direction 구간 사이 flat이 max_fill_rows 이하면 채움.
-        변경 없을 때까지 반복."""
-        result = data[:]
-        changed = True
-        while changed:
-            changed = False
-            i = 0
-            while i < n:
-                if result[i] != direction:
-                    i += 1; continue
-                j = i
-                while j < n and result[j] == direction: j += 1
-                k = j
-                while k < n and result[k] == "": k += 1
-                flat_len = k - j
-                if k < n and result[k] == direction and flat_len <= max_fill_rows:
-                    for idx in range(j, k): result[idx] = direction
-                    changed = True
-                    i = k
-                else:
-                    i = j
-        return result
-
-    # UP/DOWN 교차하며 변경 없을 때까지 반복
-    changed = True
-    filled = raw[:]
-    while changed:
-        prev = filled[:]
-        filled = fill_flat_between("UP",   filled)
-        filled = fill_flat_between("DOWN", filled)
-        changed = (filled != prev)
-
-    # ── Step3: max_normal_rows 처리 ──────────────────────────────
-    def seg_rate(seg) -> float:
-        """구간의 평균 변화율 = (끝값 - 시작값) / 시간(분)
-        시간 정보 없으면 None 반환"""
-        s, e, _ = seg
-        if e <= s:
-            return None
-        dv = values[e] - values[s]
-        ts_s = timestamps[s] if timestamps and s < len(timestamps) else None
-        ts_e = timestamps[e] if timestamps and e < len(timestamps) else None
-        if ts_s and ts_e and ts_e != ts_s:
-            dt = (ts_e - ts_s).total_seconds() / 60.0
-            return dv / dt if dt != 0 else None
-        return None   # 시간 정보 없음
-
-    def normalize_between(outer: str, data: list) -> list:
-        """
-        outer 구간 사이에 끼인 구간(inner)이 다음 조건 중 하나를 만족하면
-        outer 로 덮어써서 연결한다. (OR 조건)
-          - (max_normal_rows > 0) AND inner 길이 < max_normal_rows
-          - (max_normal_rate_diff > 0) AND 양쪽 변화율 차이 <= max_normal_rate_diff
-        inner는 "" 또는 outer 반대 방향 모두 대상.
-        """
-        if max_normal_rows <= 0 and max_normal_rate_diff <= 0:
-            return data[:]
-        result = data[:]
-
-        changed = True
-        while changed:
-            changed = False
-            segs = []
-            i = 0
-            while i < n:
-                d = result[i]; j = i
-                while j < n and result[j] == d: j += 1
-                segs.append([i, j - 1, d])
-                i = j
-
-            for si in range(1, len(segs) - 1):
-                left  = segs[si - 1]
-                mid   = segs[si]
-                right = segs[si + 1]
-
-                if left[2] != outer or right[2] != outer:
-                    continue
-
-                mid_len = mid[1] - mid[0] + 1
-
-                # OR 조건: 둘 중 하나 만족하면 연결
-                cond_rows = (max_normal_rows > 0 and mid_len < max_normal_rows)
-                cond_rate = False
-                if max_normal_rate_diff > 0:
-                    r_left  = seg_rate(left)
-                    r_right = seg_rate(right)
-                    if r_left is not None and r_right is not None:
-                        cond_rate = (abs(r_left - r_right) <= max_normal_rate_diff)
-
-                if not (cond_rows or cond_rate):
-                    continue
-
-                for k in range(mid[0], mid[1] + 1):
-                    result[k] = outer
-                changed = True
-                break
-
-        return result
-
-    if max_normal_rows > 0 or max_normal_rate_diff > 0:
-        # UP/DOWN 교차하며 변경 없을 때까지 반복
-        changed = True
-        while changed:
-            prev = filled[:]
-            filled = normalize_between("UP",   filled)
-            filled = normalize_between("DOWN", filled)
-            changed = (filled != prev)
-
-    # ── Step4: min_rows 미만 구간 → "" (fill+normal 완료 후) ─
-    segments = []
-    i = 0
-    while i < n:
-        d = filled[i]; j = i
-        while j < n and filled[j] == d: j += 1
-        segments.append((i, j - 1, d))
-        i = j
-
-    result = [""] * n
-    for s, e, d in segments:
-        if d in ("UP", "DOWN") and (e - s + 1) >= min_rows:
-            for k in range(s, e + 1):
-                result[k] = d
-
-    # ── Step5: min_rate_abs 미만 구간 → "" (마지막 단계) ─────
-    if min_rate_abs > 0.0:
-        # 결과 구간 재추출
-        segs5 = []
+    # ── 구간 목록 추출 헬퍼 ─────────────────────────────────
+    def get_segs(data):
+        segs = []
         i = 0
         while i < n:
-            d = result[i]; j = i
-            while j < n and result[j] == d: j += 1
-            segs5.append((i, j - 1, d))
+            d = data[i]; j = i
+            while j < n and data[j] == d: j += 1
+            segs.append((i, j - 1, d))
             i = j
-        for s, e, d in segs5:
-            if d not in ("UP", "DOWN"):
+        return segs
+
+    # ── Step2: fill_rows (수렴까지) ──────────────────────────
+    # 1=UP, -1=DOWN 코드로 동작
+    filled = raw[:]
+    if max_fill_rows > 0:
+        outer_changed = True
+        while outer_changed:
+            outer_changed = False
+            for direction in (1, -1):   # UP=1, DOWN=-1
+                inner_changed = True
+                while inner_changed:
+                    inner_changed = False
+                    i = 0
+                    while i < n:
+                        if filled[i] != direction:
+                            i += 1; continue
+                        j = i
+                        while j < n and filled[j] == direction: j += 1
+                        k = j
+                        while k < n and filled[k] == 0: k += 1
+                        flat_len = k - j
+                        if k < n and filled[k] == direction and flat_len <= max_fill_rows:
+                            for idx in range(j, k): filled[idx] = direction
+                            inner_changed = True
+                            outer_changed = True
+                            i = k
+                        else:
+                            i = j
+
+    # ── Step3: normalize (수렴까지) ──────────────────────────
+    if max_normal_rows > 0 or max_normal_rate_diff > 0:
+        # seg_rate 캐시 (구간 시작/끝 인덱스 기준)
+        _rate_cache = {}
+
+        def seg_rate_cached(s, e):
+            key = (s, e)
+            if key in _rate_cache:
+                return _rate_cache[key]
+            if e <= s:
+                _rate_cache[key] = None; return None
+            dt = minutes_between(s, e)
+            if dt is None:
+                _rate_cache[key] = None; return None
+            r = (values[e] - values[s]) / dt
+            _rate_cache[key] = r
+            return r
+
+        outer_changed = True
+        while outer_changed:
+            outer_changed = False
+            for direction in (1, -1):
+                inner_changed = True
+                while inner_changed:
+                    inner_changed = False
+                    segs = get_segs(filled)
+                    for si in range(1, len(segs) - 1):
+                        ls, le, ld = segs[si - 1]
+                        ms, me, md = segs[si]
+                        rs, re, rd = segs[si + 1]
+
+                        if ld != direction or rd != direction:
+                            continue
+
+                        mid_len = me - ms + 1
+                        cond_rows = (max_normal_rows > 0 and mid_len < max_normal_rows)
+                        cond_rate = False
+                        if max_normal_rate_diff > 0:
+                            rl = seg_rate_cached(ls, le)
+                            rr = seg_rate_cached(rs, re)
+                            if rl is not None and rr is not None:
+                                cond_rate = abs(rl - rr) <= max_normal_rate_diff
+
+                        if not (cond_rows or cond_rate):
+                            continue
+
+                        for k in range(ms, me + 1): filled[k] = direction
+                        _rate_cache.clear()   # 구간 변경 시 캐시 무효화
+                        inner_changed = True
+                        outer_changed = True
+                        break   # 구간 목록 재계산 후 재시작
+
+    # ── Step4: min_rows 미만 → 0 ────────────────────────────
+    result_code = [0] * n
+    for s, e, d in get_segs(filled):
+        if d != 0 and (e - s + 1) >= min_rows:
+            for k in range(s, e + 1):
+                result_code[k] = d
+
+    # ── Step5: min_rate_abs 미만 → 0 ────────────────────────
+    if min_rate_abs > 0.0:
+        for s, e, d in get_segs(result_code):
+            if d == 0:
                 continue
-            dv = abs(values[e] - values[s])
-            ts_s = timestamps[s] if timestamps and s < len(timestamps) else None
-            ts_e = timestamps[e] if timestamps and e < len(timestamps) else None
-            if ts_s and ts_e and ts_e != ts_s:
-                dt = (ts_e - ts_s).total_seconds() / 60.0
-                avg_rate = dv / dt if dt > 0 else 0.0
-            else:
-                continue   # 시간 정보 없으면 min_rate_abs 적용 불가, 건너뜀
+            dt = minutes_between(s, e)
+            if dt is None:
+                continue
+            avg_rate = abs(values[e] - values[s]) / dt if dt > 0 else 0.0
             if avg_rate < min_rate_abs:
                 for k in range(s, e + 1):
-                    result[k] = ""
+                    result_code[k] = 0
 
-    return result
-
+    # ── 정수 코드 → 문자열 변환 ─────────────────────────────
+    _MAP = {1: "UP", -1: "DOWN", 0: ""}
+    return [_MAP[c] for c in result_code]
 
 
 def count_groups(trends: list, direction: str) -> int:
@@ -681,6 +648,23 @@ def add_chart(ws,
     chart.Axes(1).AxisTitle.Text = "시간"
     chart.Axes(2).HasTitle = True
     chart.Axes(2).AxisTitle.Text = chart_title
+
+    # X축 날짜/시간 포맷 설정
+    # 데이터 셀의 NumberFormat을 읽어 그대로 차트 X축에 적용
+    try:
+        ax1 = chart.Axes(1)
+        sample_cell = data_ws.Cells(data_start_row, time_col)
+        cell_fmt = sample_cell.NumberFormat or ""
+        # 날짜/시간 포맷인지 확인 (d, m, y, h, s 포함 여부)
+        is_dt_fmt = any(c in cell_fmt.lower() for c in ("y", "d", "h", "s", ":"))
+        if is_dt_fmt:
+            ax1.NumberFormat = cell_fmt
+        else:
+            # 셀 포맷이 숫자인 경우 → 날짜+시간 기본 포맷 적용
+            # Excel serial이면 날짜+시간으로 표시
+            ax1.NumberFormat = "yyyy/mm/dd hh:mm"
+    except Exception:
+        pass
 
     # ── config 텍스트박스 + 차트 그룹화 ──────────────────────
     if config_text:
