@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#121212">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView android:text="Auto-scroll interval"
+            android:textColor="#AAAAAA" android:textSize="12sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/tvScrollVal"
+            android:textColor="#FFFFFF" android:textSize="16sp" android:textStyle="bold"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" />
+        <SeekBar android:id="@+id/sbScrollInterval"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" android:layout_marginBottom="28dp" />
+
+        <TextView android:text="Auto-rotate interval"
+            android:textColor="#AAAAAA" android:textSize="12sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/tvRotateVal"
+            android:textColor="#FFFFFF" android:textSize="16sp" android:textStyle="bold"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" />
+        <SeekBar android:id="@+id/sbRotateInterval"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" android:layout_marginBottom="28dp" />
+
+        <TextView android:text="Auto-PiP interval"
+            android:textColor="#AAAAAA" android:textSize="12sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/tvPipVal"
+            android:textColor="#FFFFFF" android:textSize="16sp" android:textStyle="bold"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" />
+        <SeekBar android:id="@+id/sbPipInterval"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" android:layout_marginBottom="28dp" />
+
+        <TextView android:text="Auto-zoom step interval"
+            android:textColor="#AAAAAA" android:textSize="12sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/tvZoomVal"
+            android:textColor="#FFFFFF" android:textSize="16sp" android:textStyle="bold"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" />
+        <SeekBar android:id="@+id/sbZoomInterval"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" android:layout_marginBottom="40dp" />
+
+        <Button android:id="@+id/btnSaveSettings"
+            android:layout_width="match_parent" android:layout_height="52dp"
+            android:text="SAVE SETTINGS"
+            android:backgroundTint="#2979FF"
+            android:textColor="#FFFFFF" android:textStyle="bold" />
+    </LinearLayout>
+</ScrollView>
