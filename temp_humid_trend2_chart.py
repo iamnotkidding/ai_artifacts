@@ -200,6 +200,29 @@ def analyze_trends(values: list, min_rows: int, max_fill_rows: int,
                 for k in range(s, e + 1):
                     result_code[k] = 0
 
+    # ── Step6: 모든 단계 완료 후 연속된 UP/DOWN 연결 ───────────
+    # 같은 방향 구간 사이 빈칸("")이 있으면 해당 방향으로 채움 (횟수 제한 없음)
+    for direction in (1, -1):
+        changed = True
+        while changed:
+            changed = False
+            i = 0
+            while i < n:
+                if result_code[i] != direction:
+                    i += 1; continue
+                j = i
+                while j < n and result_code[j] == direction: j += 1
+                # j부터 빈칸 구간 측정
+                k = j
+                while k < n and result_code[k] == 0: k += 1
+                # 빈칸 뒤가 같은 direction이면 채움
+                if k < n and result_code[k] == direction:
+                    for idx in range(j, k): result_code[idx] = direction
+                    changed = True
+                    i = k
+                else:
+                    i = j
+
     # ── 정수 코드 → 문자열 변환 ─────────────────────────────
     _MAP = {1: "UP", -1: "DOWN", 0: ""}
     return [_MAP[c] for c in result_code]
