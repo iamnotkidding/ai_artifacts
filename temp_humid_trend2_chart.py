@@ -42,40 +42,56 @@ def analyze_trends(values: list,
                    min_rate_abs: float = 0.0,
                    timestamps: list    = None) -> list:
     """
-    UP/DOWN 추세 분석 (급격한 변화 구간 감지).
-      min_rows     : 유효 구간 최소 행 수
-      min_rate_abs : 최소 분당 변화율 (0=미적용)
-    내부 자동: max_flat_rows = max_noise_rows = min_rows-1
-    Step1 raw→ Step2 flat채움→ Step3 노이즈제거→ Step4 min_rows→ Step5 min_rate→ Step6 연결
+    급격한 변화 구간 감지 (flat/노이즈 무시).
+
+    알고리즘:
+      Step1: 행별 순간 변화율 계산 (값 차이 / 시간 차이)
+             시간 없으면 값 차이로만 판별
+      Step2: |rate| >= min_rate_abs 이면 UP/DOWN, 아니면 FLAT(0)
+             min_rate_abs=0 이면 값 변화 방향만으로 판별
+      Step3: 짧은 구간 제거 (min_rows 미만)
+      Step4: 같은 방향 구간 연결 (사이에 FLAT만 있으면 무조건 합침, 수렴까지)
+
+    파라미터:
+      min_rows     : 유효 구간 최소 연속 행 수
+      min_rate_abs : 급격한 변화로 인정하는 최소 분당 변화율 (0=값방향만 사용)
     """
     n = len(values)
     if n == 0:
         return []
 
-    max_flat_rows  = max(min_rows - 1, 0)
-    max_noise_rows = max(min_rows - 1, 0)
+    ts_n = len(timestamps) if timestamps else 0
 
-    # 타임스탬프 → 분(float) 배열로 미리 변환 (반복 참조 최적화)
-    ts_min = [None] * n
-    if timestamps:
-        ts_len = len(timestamps)
-        for i in range(ts_len if ts_len < n else n):
-            ts_min[i] = timestamps[i]
-
-    def minutes_between(i, j):
-        ti, tj = ts_min[i], ts_min[j]
-        if ti and tj and tj != ti:
-            dt = (tj - ti).total_seconds() / 60.0
-            return dt if dt != 0 else None
+    def get_dt(i, j):
+        """인덱스 i→j 시간 차이(분). 없으면 None."""
+        if i < ts_n and j < ts_n:
+            ti, tj = timestamps[i], timestamps[j]
+            if ti and tj and tj != ti:
+                dt = (tj - ti).total_seconds() / 60.0
+                return dt if dt != 0 else None
         return None
 
-    def seg_rate(s, e):
-        if e <= s: return None
-        dt = minutes_between(s, e)
-        return (values[e] - values[s]) / dt if dt else None
+    # Step1+2: 행별 분류 (1=UP, -1=DOWN, 0=FLAT)
+    raw = [0] * n
+    for i in range(1, n):
+        dv = values[i] - values[i - 1]
+        if dv == 0:
+            raw[i] = 0
+            continue
+        if min_rate_abs > 0.0:
+            dt = get_dt(i - 1, i)
+            if dt is not None:
+                rate = abs(dv / dt)
+                if rate < min_rate_abs:
+                    raw[i] = 0; continue
+            # 시간 없으면 값 방향으로만 판별
+        raw[i] = 1 if dv > 0 else -1
+    # 첫 행은 이전 값이 없으므로 두 번째 행 방향 계승
+    if n >= 2:
+        raw[0] = raw[1]
 
+    # Step3: min_rows 미만 구간 제거
     def get_segs(data):
-        """O(n) 구간 목록 반환"""
         segs = []; i = 0
         while i < n:
             d = data[i]; j = i
@@ -83,72 +99,12 @@ def analyze_trends(values: list,
             segs.append((i, j - 1, d)); i = j
         return segs
 
-    # Step1: raw 방향 (1=UP, -1=DOWN, 0=flat)
-    raw = [0] * n
-    for i in range(1, n):
-        if   values[i] > values[i - 1]: raw[i] =  1
-        elif values[i] < values[i - 1]: raw[i] = -1
-
-    filled = raw
-
-    # Step2: flat 채움 — 단일 패스로 한 방향 처리, 수렴까지 반복
-    # 한 패스에서 모든 적격 flat 구간을 채우면 O(n) per pass
-    if max_flat_rows > 0:
-        for direction in (1, -1):
-            changed = True
-            while changed:
-                changed = False
-                i = 0
-                while i < n:
-                    if filled[i] != direction: i += 1; continue
-                    j = i
-                    while j < n and filled[j] == direction: j += 1
-                    k = j
-                    while k < n and filled[k] == 0: k += 1
-                    if k < n and filled[k] == direction and (k - j) <= max_flat_rows:
-                        filled[j:k] = [direction] * (k - j)
-                        changed = True
-                        i = k
-                    else:
-                        i = j
-
-    # Step3: 노이즈 제거 — 단일 패스로 전체 처리, 수렴까지
-    if max_noise_rows > 0:
-        for direction in (1, -1):
-            changed = True
-            while changed:
-                changed = False
-                segs = get_segs(filled)
-                for si in range(1, len(segs) - 1):
-                    ls, le, ld = segs[si - 1]
-                    ms, me, md = segs[si]
-                    rs, re, rd = segs[si + 1]
-                    if ld != direction or rd != direction: continue
-                    if (me - ms + 1) <= max_noise_rows:
-                        filled[ms:me + 1] = [direction] * (me - ms + 1)
-                        changed = True
-                        break  # segs 무효화 → 재계산
-
-    # Step4: min_rows 필터 — 단일 패스
     result = [0] * n
-    for s, e, d in get_segs(filled):
+    for s, e, d in get_segs(raw):
         if d != 0 and (e - s + 1) >= min_rows:
             result[s:e + 1] = [d] * (e - s + 1)
 
-    # Step5: min_rate_abs 필터
-    if min_rate_abs > 0.0:
-        changed = True
-        while changed:
-            changed = False
-            for s, e, d in get_segs(result):
-                if d == 0: continue
-                r = seg_rate(s, e)
-                if r is not None and abs(r) < min_rate_abs:
-                    result[s:e + 1] = [0] * (e - s + 1)
-                    changed = True; break
-
-    # Step6: 같은 방향 연결 — 단일 패스로 전체, 수렴까지
-    # rate_map은 max_merge_diff=0(기본)이면 불필요 → 조건부 계산
+    # Step4: 같은 방향 연결 (사이에 FLAT(0)만 있으면 합침, 수렴까지)
     for direction in (1, -1):
         changed = True
         while changed:
@@ -164,6 +120,7 @@ def analyze_trends(values: list,
 
     _MAP = {1: "UP", -1: "DOWN", 0: ""}
     return [_MAP[c] for c in result]
+
 
 def count_groups(trends: list, direction: str) -> int:
     """연속 direction 구간 개수"""
