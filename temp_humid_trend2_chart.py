@@ -51,7 +51,7 @@ def save_config(cfg: dict):
 # ══════════════════════════════════════════════
 def analyze_trends(values: list, min_rows: int, max_fill_rows: int,
                    max_normal_rows: int = 0,
-                   min_normal_rate_diff: float = 0.0,
+                   max_normal_rate_diff: float = 0.0,
                    min_rate_abs: float = 0.0) -> list:
     """
     UP/DOWN 추세 분석.
@@ -62,10 +62,10 @@ def analyze_trends(values: list, min_rows: int, max_fill_rows: int,
       Step2: max_fill_rows 처리 (UP/DOWN 각 2회)
              같은 방향 구간 사이 flat("") 이 max_fill_rows 이하면 채움
 
-      Step3: max_normal_rows / min_normal_rate_diff 처리 (OR 조건)
+      Step3: max_normal_rows / max_normal_rate_diff 처리 (OR 조건)
              UP 구간 사이에 끼인 DOWN/flat 구간이 다음 중 하나를 만족하면 연결
                - (max_normal_rows > 0) AND inner 길이 < max_normal_rows
-               - (min_normal_rate_diff > 0) AND 양쪽 변화율 차이 <= min_normal_rate_diff
+               - (max_normal_rate_diff > 0) AND 양쪽 변화율 차이 <= max_normal_rate_diff
              → UP/DOWN 각 2회 반복
 
       Step4: min_rows 처리 (fill + normal 완료 후 적용)
@@ -123,10 +123,10 @@ def analyze_trends(values: list, min_rows: int, max_fill_rows: int,
         outer 구간 사이에 끼인 구간(inner)이 다음 조건 중 하나를 만족하면
         outer 로 덮어써서 연결한다. (OR 조건)
           - (max_normal_rows > 0) AND inner 길이 < max_normal_rows
-          - (min_normal_rate_diff > 0) AND 양쪽 변화율 차이 <= min_normal_rate_diff
+          - (max_normal_rate_diff > 0) AND 양쪽 변화율 차이 <= max_normal_rate_diff
         inner는 "" 또는 outer 반대 방향 모두 대상.
         """
-        if max_normal_rows <= 0 and min_normal_rate_diff <= 0:
+        if max_normal_rows <= 0 and max_normal_rate_diff <= 0:
             return data[:]
         result = data[:]
 
@@ -154,10 +154,10 @@ def analyze_trends(values: list, min_rows: int, max_fill_rows: int,
                 # OR 조건: 둘 중 하나 만족하면 연결
                 cond_rows = (max_normal_rows > 0 and mid_len < max_normal_rows)
                 cond_rate = False
-                if min_normal_rate_diff > 0:
+                if max_normal_rate_diff > 0:
                     r_left  = seg_rate(left)
                     r_right = seg_rate(right)
-                    cond_rate = (abs(r_left - r_right) <= min_normal_rate_diff)
+                    cond_rate = (abs(r_left - r_right) <= max_normal_rate_diff)
 
                 if not (cond_rows or cond_rate):
                     continue
@@ -169,7 +169,7 @@ def analyze_trends(values: list, min_rows: int, max_fill_rows: int,
 
         return result
 
-    if max_normal_rows > 0 or min_normal_rate_diff > 0:
+    if max_normal_rows > 0 or max_normal_rate_diff > 0:
         filled = normalize_between("UP",   filled)
         filled = normalize_between("DOWN", filled)
         filled = normalize_between("UP",   filled)
@@ -615,15 +615,6 @@ def add_chart(ws,
     add_scatter("UP",   time_col, up_col,  0x00AA44, marker_size=4)
     add_scatter("DOWN", time_col, dn_col,  0xCC2222, marker_size=4)
 
-    # 보조 Y축 — 변화량 (XY Scatter, axis_group=2)
-    has_rate = (rate_up_col > 0 or rate_dn_col > 0)
-    if rate_up_col > 0:
-        add_scatter("변화량 UP",   time_col, rate_up_col,
-                    0x44BB44, marker_size=3, axis_group=2)
-    if rate_dn_col > 0:
-        add_scatter("변화량 DOWN", time_col, rate_dn_col,
-                    0xFF6666, marker_size=3, axis_group=2)
-
     chart.DisplayBlanksAs = 0
 
     chart.HasTitle = True
@@ -632,19 +623,6 @@ def add_chart(ws,
     chart.Axes(1).AxisTitle.Text = "시간"
     chart.Axes(2).HasTitle = True
     chart.Axes(2).AxisTitle.Text = chart_title
-
-    # 보조 Y축: 변화량이 하단에만 오도록 범위 설정
-    if has_rate:
-        try:
-            ax_main = chart.Axes(2)           # 주 Y축
-            ax_sec  = chart.Axes(2, 2)        # 보조 Y축 (xlSecondary=2)
-            main_range = (ax_main.MaximumScale - ax_main.MinimumScale) or 1.0
-            ax_sec.HasTitle = True
-            ax_sec.AxisTitle.Text = "변화량(/min)"
-            ax_sec.MaximumScale =  main_range * 3
-            ax_sec.MinimumScale = -main_range * 3
-        except Exception:
-            pass
 
     # ── config 텍스트박스 + 차트 그룹화 ──────────────────────
     if config_text:
@@ -972,7 +950,7 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
                                           int(t_cfg["min_rows"]),
                                           int(t_cfg["max_fill_rows"]),
                                           int(t_cfg.get("max_normal_rows", 0)),
-                                          float(t_cfg.get("min_normal_rate_diff", 0.0)),
+                                          float(t_cfg.get("max_normal_rate_diff", 0.0)),
                                           float(t_cfg.get("min_rate_abs", 0.0)))
                 t_trend_col = write_trend_col(ws, header_row, data_start_row,
                                               "Temp_Trend", t_trends)
@@ -999,7 +977,7 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
                                           int(h_cfg["min_rows"]),
                                           int(h_cfg["max_fill_rows"]),
                                           int(h_cfg.get("max_normal_rows", 0)),
-                                          float(h_cfg.get("min_normal_rate_diff", 0.0)),
+                                          float(h_cfg.get("max_normal_rate_diff", 0.0)),
                                           float(h_cfg.get("min_rate_abs", 0.0)))
                 h_trend_col = write_trend_col(ws, header_row, data_start_row,
                                               "Humid_Trend", h_trends)
@@ -1060,7 +1038,7 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
                 return (
                     f"fill:   {cfg.get('max_fill_rows',0)}\n"
                     f"normal: {cfg.get('max_normal_rows',0)}"
-                    f"  diff:{cfg.get('min_normal_rate_diff',0)}\n"
+                    f"  diff:{cfg.get('max_normal_rate_diff',0)}\n"
                     f"min:    {cfg.get('min_rows',0)}"
                     f"  rate:{cfg.get('min_rate_abs',0)}"
                 )
@@ -1196,12 +1174,12 @@ class SensorConfigFrame(tk.LabelFrame):
         self.min_rows_var         = tk.StringVar(value=str(init.get("min_rows",         3)))
         self.max_fill_rows_var        = tk.StringVar(value=str(init.get("max_fill_rows",        1)))
         self.max_normal_rows_var      = tk.StringVar(value=str(init.get("max_normal_rows",      0)))
-        self.min_normal_rate_diff_var = tk.StringVar(value=str(init.get("min_normal_rate_diff", 0.0)))
+        self.max_normal_rate_diff_var = tk.StringVar(value=str(init.get("max_normal_rate_diff", 0.0)))
         self.min_rate_abs_var     = tk.StringVar(value=str(init.get("min_rate_abs",     0.0)))
         for i, (lbl, var) in enumerate([
             ("max_fill_rows",        self.max_fill_rows_var),
             ("max_normal_rows",      self.max_normal_rows_var),
-            ("min_normal_rate_diff", self.min_normal_rate_diff_var),
+            ("max_normal_rate_diff", self.max_normal_rate_diff_var),
             ("min_rows",         self.min_rows_var),
             ("min_rate_abs",     self.min_rate_abs_var),
         ]):
@@ -1215,7 +1193,7 @@ class SensorConfigFrame(tk.LabelFrame):
     def get(self):
         return {"max_fill_rows":        int(self.max_fill_rows_var.get()),
                 "max_normal_rows":      int(self.max_normal_rows_var.get()),
-                "min_normal_rate_diff": float(self.min_normal_rate_diff_var.get()),
+                "max_normal_rate_diff": float(self.max_normal_rate_diff_var.get()),
                 "min_rows":         int(self.min_rows_var.get()),
                 "min_rate_abs":     float(self.min_rate_abs_var.get())}
 
@@ -1546,9 +1524,9 @@ class App(tk.Tk):
             self._log(
                 f"설정 저장\n"
                 f"  🌡 temp : min_rows={cfg['temp']['min_rows']}, max_fill_rows={cfg['temp']['max_fill_rows']}, "
-                f"max_normal_rows={cfg['temp']['max_normal_rows']}, min_normal_rate_diff={cfg['temp']['min_normal_rate_diff']}\n"
+                f"max_normal_rows={cfg['temp']['max_normal_rows']}, max_normal_rate_diff={cfg['temp']['max_normal_rate_diff']}\n"
                 f"  💧 humid: min_rows={cfg['humid']['min_rows']}, max_fill_rows={cfg['humid']['max_fill_rows']}, "
-                f"max_normal_rows={cfg['humid']['max_normal_rows']}, min_normal_rate_diff={cfg['humid']['min_normal_rate_diff']}")
+                f"max_normal_rows={cfg['humid']['max_normal_rows']}, max_normal_rate_diff={cfg['humid']['max_normal_rate_diff']}")
         except ValueError:
             messagebox.showerror("오류", "min_rows는 정수로 입력하세요.")
 
