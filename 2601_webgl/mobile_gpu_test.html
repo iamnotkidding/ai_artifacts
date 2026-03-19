@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>모바일 GPU 테스트</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            overflow: hidden;
+            touch-action: none;
+        }
+        #canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            touch-action: none;
+        }
+        #controls {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            padding: 15px;
+            border-radius: 10px;
+            z-index: 100;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        #frameCompare {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.9);
+            padding: 15px;
+            border-radius: 10px;
+            z-index: 100;
+            max-height: 30vh;
+            overflow-y: auto;
+        }
+        .frame-row {
+            display: flex;
+            gap: 5px;
+            margin: 5px 0;
+            align-items: center;
+        }
+        .frame-thumb {
+            width: 60px;
+            height: 40px;
+            border: 1px solid #444;
+            border-radius: 3px;
+            object-fit: cover;
+        }
+        .frame-info {
+            font-size: 11px;
+            flex: 1;
+        }
+        .btn {
+            background: #4a4aff;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            font-size: 14px;
+            cursor: pointer;
+            touch-action: manipulation;
+        }
+        .btn:active {
+            background: #3636dd;
+        }
+        .btn.active {
+            background: #ff4a4a;
+        }
+        #stats {
+            margin-top: 10px;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 3px 0;
+        }
+        h3 {
+            margin: 15px 0 10px 0;
+            font-size: 16px;
+        }
+        .scenario-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 8px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="controls">
+        <h3>🎮 GPU 테스트 시나리오</h3>
+        <button class="btn active" id="autoBtn" onclick="toggleAuto()">자동 모드 중지</button>
+        <div class="scenario-grid">
+            <button class="btn" onclick="setScenario(1)">기본 삼각형</button>
+            <button class="btn" onclick="setScenario(2)">다중 객체</button>
+            <button class="btn" onclick="setScenario(3)">파티클 시스템</button>
+            <button class="btn" onclick="setScenario(4)">복잡한 셰이더</button>
+            <button class="btn" onclick="setScenario(5)">텍스처 처리</button>
+            <button class="btn" onclick="setScenario(6)">최대 부하</button>
+        </div>
+        
+        <div id="stats">
+            <div class="stat-row"><span>현재 시나리오:</span> <span id="currentScene">1</span></div>
+            <div class="stat-row"><span>다음 변경까지:</span> <span id="countdown">-</span></div>
+            <div class="stat-row"><span>FPS:</span> <span id="fps">0</span></div>
+            <div class="stat-row"><span>객체 수:</span> <span id="objects">0</span></div>
+            <div class="stat-row"><span>삼각형:</span> <span id="triangles">0</span></div>
+            <div class="stat-row"><span>드로우콜:</span> <span id="drawcalls">0</span></div>
+            <div class="stat-row"><span>GPU:</span> <span id="gpu">-</span></div>
+            <div class="stat-row"><span>캡처된 프레임:</span> <span id="captured">0</span></div>
+        </div>
+    </div>
+    
+    <div id="frameCompare">
+        <h3>📸 캡처된 프레임 비교</h3>
+        <div id="frameList"></div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+        
+        if (!gl) {
+            alert('WebGL을 지원하지 않는 브라우저입니다.');
+        }
+
+        // GPU 정보 가져오기
+        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+        if (debugInfo) {
+            document.getElementById('gpu').textContent = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+        }
+
+        let currentScenario = 1;
+        let objects = [];
+        let particles = [];
+        let frameCount = 0;
+        let lastTime = performance.now();
+        let fps = 0;
+        let autoMode = true;
+        let autoInterval = null;
+        let scenarioStartTime = performance.now();
+        let capturedFrames = [];
+        let capturePoints = [1, 2.5, 4]; // 1초, 2.5초, 4초에 캡처
+        let capturedThisScenario = new Set();
+
+        // 캔버스 리사이즈
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            gl.viewport(0, 0, canvas.width, canvas.height);
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        // 셰이더 컴파일
+        function createShader(type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error(gl.getShaderInfoLog(shader));
+                return null;
+            }
+            return shader;
+        }
+
+        // 기본 버텍스 셰이더
+        const basicVertexShader = `
+            attribute vec2 aPosition;
+            attribute vec3 aColor;
+            varying vec3 vColor;
+            uniform vec2 uResolution;
+            uniform vec2 uOffset;
+            uniform float uScale;
+            uniform float uRotation;
+            
+            void main() {
+                vec2 pos = aPosition * uScale;
+                float c = cos(uRotation);
+                float s = sin(uRotation);
+                pos = vec2(pos.x * c - pos.y * s, pos.x * s + pos.y * c);
+                pos += uOffset;
+                vec2 clipSpace = (pos / uResolution) * 2.0 - 1.0;
+                gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
+                vColor = aColor;
+            }
+        `;
+
+        // 기본 프래그먼트 셰이더
+        const basicFragmentShader = `
+            precision mediump float;
+            varying vec3 vColor;
+            
+            void main() {
+                gl_FragColor = vec4(vColor, 1.0);
+            }
+        `;
+
+        // 복잡한 프래그먼트 셰이더 (시나리오 4용)
+        const complexFragmentShader = `
+            precision mediump float;
+            varying vec3 vColor;
+            uniform float uTime;
+            
+            void main() {
+                vec2 uv = gl_FragCoord.xy / 500.0;
+                float pattern = sin(uv.x * 10.0 + uTime) * cos(uv.y * 10.0 + uTime);
+                vec3 color = vColor * (0.5 + 0.5 * pattern);
+                color += 0.1 * sin(uTime * 2.0 + length(uv) * 5.0);
+                gl_FragColor = vec4(color, 1.0);
+            }
+        `;
+
+        // 프로그램 생성
+        function createProgram(vsSource, fsSource) {
+            const vs = createShader(gl.VERTEX_SHADER, vsSource);
+            const fs = createShader(gl.FRAGMENT_SHADER, fsSource);
+            const program = gl.createProgram();
+            gl.attachShader(program, vs);
+            gl.attachShader(program, fs);
+            gl.linkProgram(program);
+            
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                console.error(gl.getProgramInfoLog(program));
+                return null;
+            }
+            return program;
+        }
+
+        const basicProgram = createProgram(basicVertexShader, basicFragmentShader);
+        const complexProgram = createProgram(basicVertexShader, complexFragmentShader);
+
+        // 삼각형 생성
+        function createTriangle(x, y, size, color) {
+            const vertices = new Float32Array([
+                0, size, color[0], color[1], color[2],
+                -size * 0.866, -size * 0.5, color[0], color[1], color[2],
+                size * 0.866, -size * 0.5, color[0], color[1], color[2]
+            ]);
+            
+            const buffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+            
+            return {
+                buffer: buffer,
+                x: x,
+                y: y,
+                size: size,
+                rotation: 0,
+                vx: (Math.random() - 0.5) * 2,
+                vy: (Math.random() - 0.5) * 2,
+                rotSpeed: (Math.random() - 0.5) * 0.05
+            };
+        }
+
+        // 시나리오 설정
+        function setScenario(num) {
+            currentScenario = num;
+            scenarioStartTime = performance.now();
+            capturedThisScenario.clear();
+            objects = [];
+            particles = [];
+            
+            document.getElementById('currentScene').textContent = num;
+            
+            switch(num) {
+                case 1: // 기본 삼각형
+                    objects.push(createTriangle(canvas.width/2, canvas.height/2, 50, [1, 0, 0]));
+                    break;
+                case 2: // 다중 객체 (50개)
+                    for (let i = 0; i < 50; i++) {
+                        objects.push(createTriangle(
+                            Math.random() * canvas.width,
+                            Math.random() * canvas.height,
+                            20 + Math.random() * 30,
+                            [Math.random(), Math.random(), Math.random()]
+                        ));
+                    }
+                    break;
+                case 3: // 파티클 시스템 (500개)
+                    for (let i = 0; i < 500; i++) {
+                        objects.push(createTriangle(
+                            Math.random() * canvas.width,
+                            Math.random() * canvas.height,
+                            5 + Math.random() * 10,
+                            [Math.random(), Math.random(), Math.random()]
+                        ));
+                    }
+                    break;
+                case 4: // 복잡한 셰이더 (100개)
+                    for (let i = 0; i < 100; i++) {
+                        objects.push(createTriangle(
+                            Math.random() * canvas.width,
+                            Math.random() * canvas.height,
+                            30,
+                            [Math.random(), Math.random(), Math.random()]
+                        ));
+                    }
+                    break;
+                case 5: // 텍스처 처리 (200개)
+                    for (let i = 0; i < 200; i++) {
+                        objects.push(createTriangle(
+                            Math.random() * canvas.width,
+                            Math.random() * canvas.height,
+                            15,
+                            [Math.random(), Math.random(), Math.random()]
+                        ));
+                    }
+                    break;
+                case 6: // 최대 부하 (2000개)
+                    for (let i = 0; i < 2000; i++) {
+                        objects.push(createTriangle(
+                            Math.random() * canvas.width,
+                            Math.random() * canvas.height,
+                            10,
+                            [Math.random(), Math.random(), Math.random()]
+                        ));
+                    }
+                    break;
+            }
+        }
+
+        // 프레임 캡처
+        function captureFrame(elapsed) {
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+            const frameData = {
+                scenario: currentScenario,
+                time: elapsed.toFixed(1),
+                fps: fps,
+                objects: objects.length,
+                image: dataUrl,
+                timestamp: new Date().toLocaleTimeString()
+            };
+            
+            // 같은 시나리오의 같은 시점에서 이전 캡처 찾기
+            const existingIndex = capturedFrames.findIndex(f => 
+                f.scenario === currentScenario && f.time === elapsed.toFixed(1)
+            );
+            
+            if (existingIndex !== -1) {
+                // 이전 캡처와 비교
+                const prevFrame = capturedFrames[existingIndex];
+                if (compareFrames(prevFrame.image, dataUrl)) {
+                    console.log(`시나리오 ${currentScenario}, ${elapsed}초: 동일한 프레임 - 저장 안함`);
+                    return; // 같으면 저장하지 않음
+                } else {
+                    console.log(`시나리오 ${currentScenario}, ${elapsed}초: 다른 프레임 감지 - 이전 삭제 후 저장`);
+                    capturedFrames.splice(existingIndex, 1); // 이전 것 삭제
+                }
+            }
+            
+            capturedFrames.push(frameData);
+            updateFrameList();
+            document.getElementById('captured').textContent = capturedFrames.length;
+        }
+
+        // 프레임 비교 함수 (간단한 해시 기반 비교)
+        function compareFrames(img1, img2) {
+            // 데이터 URL이 완전히 같으면 true
+            if (img1 === img2) return true;
+            
+            // 간단한 비교: 이미지 데이터의 일부만 샘플링하여 비교
+            // 실제로는 매우 유사하면 같은 것으로 판단
+            const sample1 = img1.substring(0, 1000) + img1.substring(img1.length - 1000);
+            const sample2 = img2.substring(0, 1000) + img2.substring(img2.length - 1000);
+            
+            return sample1 === sample2;
+        }
+
+        // 프레임 리스트 업데이트
+        function updateFrameList() {
+            const list = document.getElementById('frameList');
+            list.innerHTML = capturedFrames.map((frame, idx) => `
+                <div class="frame-row">
+                    <img src="${frame.image}" class="frame-thumb" alt="Frame ${idx+1}">
+                    <div class="frame-info">
+                        #${idx+1} | 시나리오 ${frame.scenario} | ${frame.time}초<br>
+                        FPS: ${frame.fps} | 객체: ${frame.objects} | ${frame.timestamp}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 자동 모드 토글
+        function toggleAuto() {
+            autoMode = !autoMode;
+            const btn = document.getElementById('autoBtn');
+            
+            if (autoMode) {
+                btn.textContent = '자동 모드 중지';
+                btn.classList.add('active');
+                scenarioStartTime = performance.now();
+            } else {
+                btn.textContent = '자동 모드 시작';
+                btn.classList.remove('active');
+                document.getElementById('countdown').textContent = '-';
+            }
+        }
+
+        // 자동 시나리오 변경
+        function autoChangeScenario() {
+            if (!autoMode) return;
+            
+            currentScenario = currentScenario >= 6 ? 1 : currentScenario + 1;
+            setScenario(currentScenario);
+        }
+
+        // 자동 모드 루프 (삭제됨 - render 함수에 통합)
+        
+
+        // 렌더링
+        function render(time) {
+            time *= 0.001;
+            
+            // FPS 계산
+            frameCount++;
+            if (time - lastTime >= 1.0) {
+                fps = frameCount;
+                frameCount = 0;
+                lastTime = time;
+                document.getElementById('fps').textContent = fps;
+            }
+            
+            // 자동 모드 카운트다운 및 프레임 캡처
+            if (autoMode) {
+                const elapsed = (performance.now() - scenarioStartTime) / 1000;
+                const remaining = Math.max(0, 5 - elapsed);
+                document.getElementById('countdown').textContent = remaining.toFixed(1) + '초';
+                
+                // 5초가 지나면 다음 시나리오로 변경
+                if (elapsed >= 5) {
+                    currentScenario = currentScenario >= 6 ? 1 : currentScenario + 1;
+                    setScenario(currentScenario);
+                }
+                
+                // 지정된 시간에 프레임 캡처 (각 시점당 2번)
+                capturePoints.forEach(point => {
+                    if (elapsed >= point && elapsed < point + 0.1) {
+                        const key = `${currentScenario}-${point}`;
+                        if (!capturedThisScenario.has(key)) {
+                            capturedThisScenario.add(key);
+                            // 약간의 딜레이를 두고 2번 캡처
+                            setTimeout(() => captureFrame(point), 0);
+                            setTimeout(() => captureFrame(point), 50);
+                        }
+                    }
+                });
+            }
+            
+            // 화면 클리어
+            gl.clearColor(0.1, 0.1, 0.15, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            
+            // 프로그램 선택
+            const program = currentScenario === 4 ? complexProgram : basicProgram;
+            gl.useProgram(program);
+            
+            const posLoc = gl.getAttribLocation(program, 'aPosition');
+            const colorLoc = gl.getAttribLocation(program, 'aColor');
+            const resLoc = gl.getUniformLocation(program, 'uResolution');
+            const offsetLoc = gl.getUniformLocation(program, 'uOffset');
+            const scaleLoc = gl.getUniformLocation(program, 'uScale');
+            const rotLoc = gl.getUniformLocation(program, 'uRotation');
+            const timeLoc = gl.getUniformLocation(program, 'uTime');
+            
+            gl.uniform2f(resLoc, canvas.width, canvas.height);
+            if (timeLoc) gl.uniform1f(timeLoc, time);
+            
+            let drawCalls = 0;
+            
+            // 객체 그리기
+            objects.forEach(obj => {
+                // 위치 업데이트
+                obj.x += obj.vx;
+                obj.y += obj.vy;
+                obj.rotation += obj.rotSpeed;
+                
+                // 경계 체크
+                if (obj.x < 0 || obj.x > canvas.width) obj.vx *= -1;
+                if (obj.y < 0 || obj.y > canvas.height) obj.vy *= -1;
+                
+                // 그리기
+                gl.bindBuffer(gl.ARRAY_BUFFER, obj.buffer);
+                gl.enableVertexAttribArray(posLoc);
+                gl.enableVertexAttribArray(colorLoc);
+                gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 20, 0);
+                gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 20, 8);
+                
+                gl.uniform2f(offsetLoc, obj.x, obj.y);
+                gl.uniform1f(scaleLoc, 1.0);
+                gl.uniform1f(rotLoc, obj.rotation);
+                
+                gl.drawArrays(gl.TRIANGLES, 0, 3);
+                drawCalls++;
+            });
+            
+            // 통계 업데이트
+            document.getElementById('objects').textContent = objects.length;
+            document.getElementById('triangles').textContent = objects.length;
+            document.getElementById('drawcalls').textContent = drawCalls;
+            
+            requestAnimationFrame(render);
+        }
+
+        // 초기 시나리오 시작
+        setScenario(1);
+        requestAnimationFrame(render);
+    </script>
+</body>
+</html>
