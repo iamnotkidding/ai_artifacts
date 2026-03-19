@@ -588,6 +588,34 @@ def add_chart(ws,
     data_ws  = src_ws if src_ws is not None else ws
     data_end = data_start_row + data_rows - 1
 
+    # 동일 타이틀의 기존 차트(및 그룹) 모두 제거
+    title_to_remove = f"{sheet_name} {chart_title}"
+    to_delete = []
+    for co in ws.ChartObjects():
+        try:
+            if co.Chart.ChartTitle.Text == title_to_remove:
+                to_delete.append(co.Name)
+        except Exception:
+            pass
+    # 그룹 안에 있는 차트도 확인 (Shape 레벨)
+    for sh in ws.Shapes:
+        try:
+            if sh.Type == 6:   # msoGroup=6
+                for item in sh.GroupItems:
+                    try:
+                        if item.Chart.ChartTitle.Text == title_to_remove:
+                            to_delete.append(sh.Name)
+                            break
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    for name in set(to_delete):
+        try:
+            ws.Shapes(name).Delete()
+        except Exception:
+            pass
+
     chart_obj = ws.ChartObjects().Add(chart_left, chart_top,
                                       chart_width, chart_height)
     chart = chart_obj.Chart
