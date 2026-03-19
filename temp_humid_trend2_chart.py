@@ -57,17 +57,19 @@ def analyze_trends(values: list, min_rows: int, max_fill_rows: int,
     """
     UP/DOWN 추세 분석.
 
-    Step1: 인접 값 비교 → raw 방향 (정수 코드)
-    Step2: fill_rows  — 같은 방향 사이 flat 구간 채움 (수렴까지)
-    Step3: normalize  — outer 사이 inner 구간 연결 (수렴까지)
-    Step4: min_rows   — 짧은 구간 제거
-    Step5: min_rate_abs — 변화율 작은 구간 제거
+    Step1: 인접 값 비교 → raw 방향 (정수 코드 1/−1/0)
+    Step2: fill_rows  — 같은 방향 사이 flat 채움 (수렴까지)
+           ※ 채울 때마다 합쳐진 구간의 변화량 재계산
+    Step3: normalize  — outer 사이 inner 연결 (수렴까지)
+           ※ 합칠 때마다 즉시 변화량 재계산 → 다음 비교에 반영
+    Step4: min_rows   — 짧은 구간 제거, 재계산
+    Step5: min_rate_abs — 변화율 작은 구간 제거, 재계산
+    Step6: 남은 연속 UP/UP, DOWN/DOWN 연결, 재계산
     """
     n = len(values)
     if n == 0:
         return []
 
-    # 타임스탬프 유효 범위 미리 계산
     ts_len = len(timestamps) if timestamps else 0
 
     def get_ts(i):
@@ -82,14 +84,16 @@ def analyze_trends(values: list, min_rows: int, max_fill_rows: int,
             return dt if dt != 0 else None
         return None
 
-    # ── Step1: 인접 비교 → raw 방향 ─────────────────────────
-    # 1=UP, -1=DOWN, 0=flat
-    raw = [0] * n
-    for i in range(1, n):
-        if   values[i] > values[i - 1]: raw[i] =  1
-        elif values[i] < values[i - 1]: raw[i] = -1
+    def seg_rate(s, e):
+        """구간 [s, e]의 분당 변화율. 시간 없으면 None."""
+        if e <= s:
+            return None
+        dt = minutes_between(s, e)
+        if dt is None:
+            return None
+        return (values[e] - values[s]) / dt
 
-    # ── 구간 목록 추출 헬퍼 ─────────────────────────────────
+    # ── 구간 목록 추출 ───────────────────────────────────────
     def get_segs(data):
         segs = []
         i = 0
@@ -100,14 +104,28 @@ def analyze_trends(values: list, min_rows: int, max_fill_rows: int,
             i = j
         return segs
 
-    # ── Step2: fill_rows (수렴까지) ──────────────────────────
-    # 1=UP, -1=DOWN 코드로 동작
+    # ── 구간별 rate 딕셔너리 계산 ───────────────────────────
+    # key=(s,e) → rate(float|None)
+    def build_rate_map(data):
+        rm = {}
+        for s, e, d in get_segs(data):
+            if d != 0:
+                rm[(s, e)] = seg_rate(s, e)
+        return rm
+
+    # ── Step1: raw 방향 ─────────────────────────────────────
+    raw = [0] * n
+    for i in range(1, n):
+        if   values[i] > values[i - 1]: raw[i] =  1
+        elif values[i] < values[i - 1]: raw[i] = -1
+
+    # ── Step2: fill_rows (수렴까지, 합칠 때마다 rate 재계산) ─
     filled = raw[:]
     if max_fill_rows > 0:
         outer_changed = True
         while outer_changed:
             outer_changed = False
-            for direction in (1, -1):   # UP=1, DOWN=-1
+            for direction in (1, -1):
                 inner_changed = True
                 while inner_changed:
                     inner_changed = False
@@ -122,30 +140,19 @@ def analyze_trends(values: list, min_rows: int, max_fill_rows: int,
                         flat_len = k - j
                         if k < n and filled[k] == direction and flat_len <= max_fill_rows:
                             for idx in range(j, k): filled[idx] = direction
+                            # 합쳐진 구간 [i .. k-1+...] rate 재계산은
+                            # build_rate_map 호출 시 자동 반영
                             inner_changed = True
                             outer_changed = True
                             i = k
                         else:
                             i = j
 
-    # ── Step3: normalize (수렴까지) ──────────────────────────
+    # Step2 완료 후 rate 맵 생성
+    rate_map = build_rate_map(filled)
+
+    # ── Step3: normalize (수렴까지, 합칠 때마다 rate 재계산) ─
     if max_normal_rows > 0 or max_normal_rate_diff > 0:
-        # seg_rate 캐시 (구간 시작/끝 인덱스 기준)
-        _rate_cache = {}
-
-        def seg_rate_cached(s, e):
-            key = (s, e)
-            if key in _rate_cache:
-                return _rate_cache[key]
-            if e <= s:
-                _rate_cache[key] = None; return None
-            dt = minutes_between(s, e)
-            if dt is None:
-                _rate_cache[key] = None; return None
-            r = (values[e] - values[s]) / dt
-            _rate_cache[key] = r
-            return r
-
         outer_changed = True
         while outer_changed:
             outer_changed = False
@@ -166,42 +173,60 @@ def analyze_trends(values: list, min_rows: int, max_fill_rows: int,
                         cond_rows = (max_normal_rows > 0 and mid_len < max_normal_rows)
                         cond_rate = False
                         if max_normal_rate_diff > 0:
-                            rl = seg_rate_cached(ls, le)
-                            rr = seg_rate_cached(rs, re)
+                            rl = rate_map.get((ls, le))
+                            rr = rate_map.get((rs, re))
+                            if rl is None: rl = seg_rate(ls, le)
+                            if rr is None: rr = seg_rate(rs, re)
                             if rl is not None and rr is not None:
                                 cond_rate = abs(rl - rr) <= max_normal_rate_diff
 
                         if not (cond_rows or cond_rate):
                             continue
 
+                        # 합치기
                         for k in range(ms, me + 1): filled[k] = direction
-                        _rate_cache.clear()   # 구간 변경 시 캐시 무효화
+                        # 합쳐진 구간 [ls .. re] rate 즉시 재계산
+                        new_rate = seg_rate(ls, re)
+                        # 기존 좌우 키 제거, 새 합쳐진 구간 키 등록
+                        rate_map.pop((ls, le), None)
+                        rate_map.pop((rs, re), None)
+                        rate_map[(ls, re)] = new_rate
+
                         inner_changed = True
                         outer_changed = True
-                        break   # 구간 목록 재계산 후 재시작
+                        break   # 구간 목록 재계산
 
-    # ── Step4: min_rows 미만 → 0 ────────────────────────────
+        # Step3 후 rate_map 전체 재계산 (합쳐진 구간 정합)
+        rate_map = build_rate_map(filled)
+
+    # ── Step4: min_rows 미만 → 0, rate_map 재계산 ───────────
     result_code = [0] * n
     for s, e, d in get_segs(filled):
         if d != 0 and (e - s + 1) >= min_rows:
             for k in range(s, e + 1):
                 result_code[k] = d
+    rate_map = build_rate_map(result_code)
 
-    # ── Step5: min_rate_abs 미만 → 0 ────────────────────────
+    # ── Step5: min_rate_abs 미만 → 0, rate_map 재계산 ───────
     if min_rate_abs > 0.0:
-        for s, e, d in get_segs(result_code):
-            if d == 0:
-                continue
-            dt = minutes_between(s, e)
-            if dt is None:
-                continue
-            avg_rate = abs(values[e] - values[s]) / dt if dt > 0 else 0.0
-            if avg_rate < min_rate_abs:
-                for k in range(s, e + 1):
-                    result_code[k] = 0
+        changed = True
+        while changed:
+            changed = False
+            for s, e, d in get_segs(result_code):
+                if d == 0:
+                    continue
+                r = rate_map.get((s, e))
+                if r is None:
+                    r = seg_rate(s, e)
+                if r is None:
+                    continue
+                if abs(r) < min_rate_abs:
+                    for k in range(s, e + 1): result_code[k] = 0
+                    changed = True
+                    break   # 구간 목록 재계산
+        rate_map = build_rate_map(result_code)
 
-    # ── Step6: 모든 단계 완료 후 연속된 UP/DOWN 연결 ───────────
-    # 같은 방향 구간 사이 빈칸("")이 있으면 해당 방향으로 채움 (횟수 제한 없음)
+    # ── Step6: 연속 UP/DOWN 연결, rate_map 재계산 ───────────
     for direction in (1, -1):
         changed = True
         while changed:
@@ -212,16 +237,15 @@ def analyze_trends(values: list, min_rows: int, max_fill_rows: int,
                     i += 1; continue
                 j = i
                 while j < n and result_code[j] == direction: j += 1
-                # j부터 빈칸 구간 측정
                 k = j
                 while k < n and result_code[k] == 0: k += 1
-                # 빈칸 뒤가 같은 direction이면 채움
                 if k < n and result_code[k] == direction:
                     for idx in range(j, k): result_code[idx] = direction
                     changed = True
                     i = k
                 else:
                     i = j
+    rate_map = build_rate_map(result_code)   # 최종 rate_map 동기화
 
     # ── 정수 코드 → 문자열 변환 ─────────────────────────────
     _MAP = {1: "UP", -1: "DOWN", 0: ""}
