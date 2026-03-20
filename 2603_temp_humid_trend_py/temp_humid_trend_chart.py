@@ -107,25 +107,40 @@ def analyze_trends(values: list,
         if length >= min_rows or (min_delta > 0 and delta >= min_delta):
             result[s:e + 1] = [d] * length
 
-    # Step4: 같은 방향 연결
-    # 사이가 FLAT(0)이거나, 짧고 변화량 작은 노이즈 구간이면 흡수하여 연결
+    # Step4: 같은 방향 구간 연결 (수렴까지)
+    # 두 같은 방향 그룹 사이의 모든 구간(스팬)을 검사:
+    #   스팬 내 각 구간이 모두 FLAT 또는 노이즈(짧고 delta 작음)이면
+    #   스팬 전체를 해당 방향으로 덮어써서 연결
+    def is_absorbable(seg_d, seg_s, seg_e):
+        """구간이 FLAT이거나 노이즈(짧고 delta 작음)이면 True"""
+        if seg_d == 0:
+            return True
+        seg_len = seg_e - seg_s + 1
+        return (min_delta > 0
+                and seg_len < min_rows
+                and mid_delta(seg_s, seg_e) < min_delta)
+
     for direction in (1, -1):
         changed = True
         while changed:
             changed = False
             segs = get_segs(result)
-            for si in range(1, len(segs) - 1):
-                ls, le, ld = segs[si - 1]
-                ms, me, md = segs[si]
-                rs, re, rd = segs[si + 1]
-                if ld != direction or rd != direction: continue
-                mid_len = me - ms + 1
-                is_flat  = (md == 0)
-                is_noise = (mid_len < min_rows and
-                            min_delta > 0 and mid_delta(ms, me) < min_delta)
-                if not (is_flat or is_noise): continue
-                result[ms:me + 1] = [direction] * mid_len
-                changed = True; break
+            # 현재 direction 구간 인덱스 목록
+            dir_idxs = [i for i, (s, e, d) in enumerate(segs) if d == direction]
+            for k in range(len(dir_idxs) - 1):
+                li = dir_idxs[k]       # 왼쪽 direction 구간
+                ri = dir_idxs[k + 1]   # 오른쪽 direction 구간 (인접하지 않아도 됨)
+                # 사이에 다른 direction 구간이 있으면 건너뜀
+                span_segs = segs[li + 1: ri]  # 두 direction 사이의 모든 구간
+                if not span_segs:
+                    continue
+                # 스팬 내 모든 구간이 흡수 가능한지 확인
+                if all(is_absorbable(d, s, e) for s, e, d in span_segs):
+                    # 스팬 전체를 direction으로 채움
+                    span_s = span_segs[0][0]
+                    span_e = span_segs[-1][1]
+                    result[span_s:span_e + 1] = [direction] * (span_e - span_s + 1)
+                    changed = True; break
 
     _MAP = {1: "UP", -1: "DOWN", 0: ""}
     return [_MAP[c] for c in result]
