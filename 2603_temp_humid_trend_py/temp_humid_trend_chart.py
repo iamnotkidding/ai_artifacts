@@ -38,32 +38,42 @@ def save_config(cfg: dict):
 # 추세 분석
 # ══════════════════════════════════════════════
 def analyze_trends(values: list,
-                   min_rate: float    = 0.0,
-                   final_min_rows: int = 3,
-                   timestamps: list   = None) -> list:
+                   min_rate: float      = 0.0,
+                   lookahead_rows: int  = 3,
+                   timestamps: list     = None) -> list:
     """
-    UP/DOWN 그룹 감지 — 피크/밸리 기반 경계 결정.
+    DOWN/UP 그룹 감지.
 
-    DOWN 그룹:
-      시작: 직전 FLAT 구간의 최고값 행 (하강 시작 직전 피크)
-      끝  : 하강 후 분당 변화량 >= +min_rate 로 반전되기 직전의 최저값 행
+    기준값: values[0] (시리즈 시작값)
 
-    UP 그룹:
-      시작: DOWN 끝 이후 첫 번째 rate >= +min_rate 행
-      끝  : 연속 rate >= +min_rate 구간의 마지막 행
+    DOWN:
+      시작: 값 < 기준값  AND  |분당변화율| >= min_rate 인 첫 행
+      끝  : 분당변화율 < min_rate 가 된 지점에서 lookahead_rows 행 더 확인하여
+            최저값을 찾는 과정을 최저값이 갱신되지 않을 때까지 반복
+      시작~끝 전체를 DOWN으로 채움
+
+    UP:
+      시작: DOWN 끝 다음 행
+      끝  : 값 >= 기준값 이 된 행
+      시작~끝 전체를 UP으로 채움
+
+    이후 다음 DOWN 탐지를 이어서 반복
 
     파라미터:
-      min_rate      : 유효 변화로 인정하는 최소 분당 변화율
-      final_min_rows: 최종 유효 그룹 최소 행 수
+      min_rate      : DOWN 시작 기준 최소 분당 변화율 절대값
+      lookahead_rows: DOWN 끝 탐색 시 추가 확인 행 수
     """
     n = len(values)
     if n == 0:
         return []
 
     ts_n = len(timestamps) if timestamps else 0
+    start_val = values[0]   # 기준값
 
     def get_rate(i):
-        if i == 0: return 0.0
+        """i-1 → i 구간 분당 변화율. 시간 없으면 값 차이 반환."""
+        if i <= 0:
+            return 0.0
         dv = values[i] - values[i - 1]
         if i < ts_n and i - 1 < ts_n:
             ti, tj = timestamps[i - 1], timestamps[i]
@@ -72,61 +82,67 @@ def analyze_trends(values: list,
                 return dv / dt if dt != 0 else 0.0
         return float(dv)
 
-    rates = [get_rate(i) for i in range(n)]
-    result = [0] * n
+    result = [0] * n   # 0=없음, 1=UP, -1=DOWN
 
-    i = 0
+    i = 1   # 0번 행은 기준값이므로 1번부터 탐색
     while i < n:
-        # DOWN 시작 탐지: rate <= -min_rate
-        if rates[i] <= -min_rate:
-            # DOWN 시작: 현재 행(i) 직전 FLAT/안정 구간의 최고값 행
-            j = i - 1
-            while j > 0 and abs(rates[j]) < min_rate:
-                j -= 1
-            # j+1 ~ i-1 사이에서 최고값 행 탐색
-            search_start = j + 1 if j >= 0 else 0
-            search_end   = i      # i-1까지 (i 포함 시 하강 행 포함되므로)
-            if search_start < search_end:
-                peak_idx = max(range(search_start, search_end),
-                               key=lambda x: values[x])
-            else:
-                peak_idx = i - 1 if i > 0 else 0
+        # ── DOWN 시작 탐색 ───────────────────────────────────
+        # 조건: 값 < 기준값 AND |rate| >= min_rate
+        if values[i] < start_val and abs(get_rate(i)) >= min_rate:
+            down_start = i
 
-            # DOWN 활성 구간 끝 탐색: rate <= -min_rate 연속
+            # ── DOWN 끝 탐색 ─────────────────────────────────
+            # |rate| < min_rate 가 된 지점에서 lookahead_rows 더 확인
+            # 최저값이 갱신되면 계속, 갱신 안 되면 확정
             k = i
-            while k < n and rates[k] <= -min_rate:
-                k += 1
-            # k = 활성 하강 종료 직후
+            valley_idx = i
 
-            # 밸리 탐색: k 이후 rate >= +min_rate 가 나오기 전까지 최저값
-            valley_idx = k - 1
-            m = k
-            while m < n and rates[m] < min_rate:
-                if values[m] < values[valley_idx]:
-                    valley_idx = m
-                m += 1
+            while k < n:
+                # 현재 k에서 rate 확인
+                if abs(get_rate(k)) >= min_rate:
+                    # 아직 활성 하강/상승 중
+                    if values[k] < values[valley_idx]:
+                        valley_idx = k
+                    k += 1
+                else:
+                    # rate < min_rate: lookahead_rows 만큼 앞 확인
+                    look_end = min(k + lookahead_rows, n)
+                    new_valley = valley_idx
+                    for m in range(k, look_end):
+                        if values[m] < values[new_valley]:
+                            new_valley = m
+                    if new_valley != valley_idx:
+                        # 최저값 갱신 → 계속 탐색
+                        valley_idx = new_valley
+                        k = new_valley + 1
+                    else:
+                        # 갱신 없음 → DOWN 끝 확정
+                        break
 
-            down_start = peak_idx
-            down_end   = valley_idx
+            down_end = valley_idx
 
-            if down_end > down_start and (down_end - down_start + 1) >= final_min_rows:
+            # DOWN 시작~끝 채움
+            if down_end >= down_start:
                 for idx in range(down_start, down_end + 1):
                     result[idx] = -1
 
-            # UP 탐지: down_end 이후 첫 번째 rate >= +min_rate 행 탐색
-            p = down_end + 1
-            while p < n and rates[p] < min_rate:
-                p += 1
-            # p = UP 시작 (rate >= min_rate 첫 행)
-
-            if p < n and rates[p] >= min_rate:
-                up_start = p
-                up_end   = p
-                while p < n and rates[p] >= min_rate:
-                    up_end = p
+            # ── UP 탐색 ──────────────────────────────────────
+            # UP 시작: down_end + 1
+            up_start = down_end + 1
+            if up_start < n:
+                # UP 끝: 값 >= 기준값 이 된 행
+                up_end = up_start
+                p = up_start
+                while p < n:
+                    if values[p] >= start_val:
+                        up_end = p
+                        break
                     p += 1
+                else:
+                    up_end = n - 1  # 기준값에 못 도달하면 끝까지
 
-                if (up_end - up_start + 1) >= final_min_rows:
+                # UP 시작~끝 채움
+                if up_end >= up_start:
                     for idx in range(up_start, up_end + 1):
                         result[idx] = 1
 
@@ -827,7 +843,7 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
             if temp_vals:
                 t_trends = analyze_trends(temp_vals,
                                           float(t_cfg.get("min_rate",       0.0)),
-                                          int(t_cfg.get("final_min_rows",  3)),
+                                          int(t_cfg.get("lookahead_rows",  3)),
                                           timestamps)
                 t_trend_col = write_trend_col(ws, header_row, data_start_row,
                                               "Temp_Trend", t_trends)
@@ -852,7 +868,7 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
             if humid_vals:
                 h_trends = analyze_trends(humid_vals,
                                           float(h_cfg.get("min_rate",       0.0)),
-                                          int(h_cfg.get("final_min_rows",  3)),
+                                          int(h_cfg.get("lookahead_rows",  3)),
                                           timestamps)
                 h_trend_col = write_trend_col(ws, header_row, data_start_row,
                                               "Humid_Trend", h_trends)
@@ -916,7 +932,7 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
             def _cfg_text(cfg):
                 return (
                     f"min_rate:       {cfg.get('min_rate',0.0)}\n"
-                    f"final_min_rows: {cfg.get('final_min_rows',3)}"
+                    f"lookahead_rows: {cfg.get('lookahead_rows',3)}"
                 )
             t_cfg_text = _cfg_text(t_cfg)
             h_cfg_text = _cfg_text(h_cfg)
@@ -1048,10 +1064,10 @@ class SensorConfigFrame(tk.LabelFrame):
                          labelanchor="nw", padx=8, pady=6)
         self.configure(background=bg)
         self.min_rate_var       = tk.StringVar(value=str(init.get("min_rate",       0.0)))
-        self.final_min_rows_var = tk.StringVar(value=str(init.get("final_min_rows", 3)))
+        self.lookahead_rows_var = tk.StringVar(value=str(init.get("lookahead_rows", 3)))
         for i, (lbl, var) in enumerate([
-            ("min_rate       (유효 분당 변화율 기준)", self.min_rate_var),
-            ("final_min_rows (최종 최소 행)",          self.final_min_rows_var),
+            ("min_rate       (DOWN 기준 분당 변화율)", self.min_rate_var),
+            ("lookahead_rows (DOWN 끝 탐색 추가 행)",  self.lookahead_rows_var),
         ]):
             tk.Label(self, text=lbl, font=lf, bg=bg, fg=fg,
                      anchor="e", width=26).grid(
@@ -1062,7 +1078,7 @@ class SensorConfigFrame(tk.LabelFrame):
 
     def get(self):
         return {"min_rate":       float(self.min_rate_var.get()),
-                "final_min_rows": int(self.final_min_rows_var.get())}
+                "lookahead_rows": int(self.lookahead_rows_var.get())}
 
 # ══════════════════════════════════════════════
 # GUI: 시트 행
@@ -1393,8 +1409,8 @@ class App(tk.Tk):
             self.config_data = cfg
             self._log(
                 f"설정 저장\n"
-                f"  🌡 temp : min_rate={cfg['temp']['min_rate']}  final_min_rows={cfg['temp']['final_min_rows']}\n"
-                f"  💧 humid: min_rate={cfg['humid']['min_rate']}  final_min_rows={cfg['humid']['final_min_rows']}")
+                f"  🌡 temp : min_rate={cfg['temp']['min_rate']}  lookahead_rows={cfg['temp']['lookahead_rows']}\n"
+                f"  💧 humid: min_rate={cfg['humid']['min_rate']}  lookahead_rows={cfg['humid']['lookahead_rows']}")
         except ValueError:
             messagebox.showerror("오류", "final_min_rows는 정수로 입력하세요.")
 
