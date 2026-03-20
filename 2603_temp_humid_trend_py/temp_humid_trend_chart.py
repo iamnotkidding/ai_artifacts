@@ -63,7 +63,8 @@ def analyze_trends(values: list,
       시작~끝 전체를 UP으로 채움
       길이 <= noise_max_rows 이면 노이즈로 무시
 
-    최종: 길이 <= noise_max_rows 인 그룹 제거
+    최종1: 길이 <= noise_max_rows 인 그룹 제거
+    최종2: 그룹 확정 후 분당 변화율 재계산 → < min_rate 이면 제거
 
     파라미터:
       min_rate      : DOWN/UP 기준 최소 분당 변화율 절대값
@@ -177,7 +178,17 @@ def analyze_trends(values: list,
         else:
             i += 1
 
-    # 최종 노이즈 제거: 길이 <= noise_max_rows 인 그룹 제거
+    def grp_rate_abs(s, e):
+        """구간 [s..e] 분당 변화율 절대값. 시간 없으면 None."""
+        if e <= s: return None
+        if s < ts_n and e < ts_n:
+            ti, te = timestamps[s], timestamps[e]
+            if ti and te and te != ti:
+                dt = (te - ti).total_seconds() / 60.0
+                return abs(values[e] - values[s]) / dt if dt > 0 else None
+        return None
+
+    # 최종 필터 1: 길이 <= noise_max_rows 인 그룹 제거
     if noise_max_rows > 0:
         i = 0
         while i < n:
@@ -185,6 +196,18 @@ def analyze_trends(values: list,
             while j < n and result[j] == d: j += 1
             if d != 0 and (j - i) <= noise_max_rows:
                 for k in range(i, j): result[k] = 0
+            i = j
+
+    # 최종 필터 2: 분당 변화율 < min_rate 인 그룹 제거 (그룹 확정 후 재계산)
+    if min_rate > 0.0:
+        i = 0
+        while i < n:
+            d = result[i]; j = i
+            while j < n and result[j] == d: j += 1
+            if d != 0:
+                r = grp_rate_abs(i, j - 1)
+                if r is not None and r < min_rate:
+                    for k in range(i, j): result[k] = 0
             i = j
 
     _MAP = {1: "UP", -1: "DOWN", 0: ""}
