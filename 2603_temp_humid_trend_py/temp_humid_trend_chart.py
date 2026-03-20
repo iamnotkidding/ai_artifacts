@@ -38,50 +38,33 @@ def save_config(cfg: dict):
 # 추세 분석
 # ══════════════════════════════════════════════
 def analyze_trends(values: list,
-                   min_rows: int       = 3,
-                   min_rate_abs: float = 0.0,
-                   min_delta: float    = 0.0,
-                   timestamps: list    = None) -> list:
+                   min_rows: int    = 3,
+                   min_delta: float = 0.0,
+                   timestamps: list = None) -> list:
     """
-    급격한 변화 구간 감지 (flat/노이즈 무시).
+    UP/DOWN 추세 분석.
 
-    Step1+2: 행별 |rate| >= min_rate_abs → UP/DOWN, 아니면 FLAT
-             시간 없으면 값 방향만 사용
-    Step3:   짧고(< min_rows) 변화량도 작은(< min_delta) 구간 제거
-             둘 중 하나라도 충족하면 유효 (길이 충분 OR 변화량 충분)
-    Step4:   같은 방향 구간 연결 (수렴까지)
-             사이가 FLAT이거나, 짧고 변화량 작은 노이즈면 흡수하여 연결
+    Step1: 인접 값 비교 → UP/DOWN/FLAT 분류
+           첫 행은 두 번째 행 방향 계승
+    Step2: 같은 방향 그룹 최대한 합치기 (수렴까지)
+           두 그룹 사이 스팬의 |값 변화| < min_delta 이면 흡수하여 연결
+           min_delta=0 이면 FLAT(0) 구간만 연결
+    Step3: 길이 < min_rows 인 짧은 그룹 제거
 
     파라미터:
-      min_rows     : 유효 구간 최소 행 수
-      min_rate_abs : 최소 분당 변화율 (0=미적용)
-      min_delta    : 짧은 구간도 유효로 인정하는 최소 값 변화량 (0=미적용)
+      min_rows  : 유효 그룹 최소 행 수
+      min_delta : 그룹 사이 스팬 흡수 허용 최대 값 변화량 (0=FLAT만 연결)
     """
     n = len(values)
     if n == 0:
         return []
 
-    ts_n = len(timestamps) if timestamps else 0
-
-    def get_dt(i, j):
-        if i < ts_n and j < ts_n:
-            ti, tj = timestamps[i], timestamps[j]
-            if ti and tj and tj != ti:
-                dt = (tj - ti).total_seconds() / 60.0
-                return dt if dt != 0 else None
-        return None
-
-    # Step1+2: 행별 분류
+    # Step1: 분류
     raw = [0] * n
     for i in range(1, n):
         dv = values[i] - values[i - 1]
-        if dv == 0:
-            continue
-        if min_rate_abs > 0.0:
-            dt = get_dt(i - 1, i)
-            if dt is not None and abs(dv / dt) < min_rate_abs:
-                continue
-        raw[i] = 1 if dv > 0 else -1
+        if   dv > 0: raw[i] =  1
+        elif dv < 0: raw[i] = -1
     if n >= 2:
         raw[0] = raw[1]
 
@@ -93,57 +76,45 @@ def analyze_trends(values: list,
             segs.append((i, j - 1, d)); i = j
         return segs
 
-    def mid_delta(ms, me):
-        """구간 진입 직전 값 기준 변화량"""
-        v_before = values[ms - 1] if ms > 0 else values[ms]
-        return abs(values[me] - v_before)
+    def span_delta(s, e):
+        """스팬 [s..e]의 전체 값 변화량 (진입 이전 기준)"""
+        v_before = values[s - 1] if s > 0 else values[s]
+        return abs(values[e] - v_before)
 
-    # Step3: 짧고 변화량도 작은 구간만 제거 (하나라도 충족하면 유효)
-    result = [0] * n
-    for s, e, d in get_segs(raw):
-        if d == 0: continue
-        length = e - s + 1
-        delta  = mid_delta(s, e)
-        if length >= min_rows or (min_delta > 0 and delta >= min_delta):
-            result[s:e + 1] = [d] * length
-
-    # Step4: 같은 방향 구간 연결 (수렴까지)
-    # 두 같은 방향 그룹 사이의 모든 구간(스팬)을 검사:
-    #   스팬 내 각 구간이 모두 FLAT 또는 노이즈(짧고 delta 작음)이면
-    #   스팬 전체를 해당 방향으로 덮어써서 연결
-    def is_absorbable(seg_d, seg_s, seg_e):
-        """구간이 FLAT이거나 노이즈(짧고 delta 작음)이면 True"""
-        if seg_d == 0:
-            return True
-        seg_len = seg_e - seg_s + 1
-        return (min_delta > 0
-                and seg_len < min_rows
-                and mid_delta(seg_s, seg_e) < min_delta)
-
+    # Step2: 같은 방향 최대한 합치기
+    result = raw[:]
     for direction in (1, -1):
         changed = True
         while changed:
             changed = False
             segs = get_segs(result)
-            # 현재 direction 구간 인덱스 목록
             dir_idxs = [i for i, (s, e, d) in enumerate(segs) if d == direction]
             for k in range(len(dir_idxs) - 1):
-                li = dir_idxs[k]       # 왼쪽 direction 구간
-                ri = dir_idxs[k + 1]   # 오른쪽 direction 구간 (인접하지 않아도 됨)
-                # 사이에 다른 direction 구간이 있으면 건너뜀
-                span_segs = segs[li + 1: ri]  # 두 direction 사이의 모든 구간
-                if not span_segs:
+                li = dir_idxs[k]
+                ri = dir_idxs[k + 1]
+                span = segs[li + 1: ri]
+                if not span:
                     continue
-                # 스팬 내 모든 구간이 흡수 가능한지 확인
-                if all(is_absorbable(d, s, e) for s, e, d in span_segs):
-                    # 스팬 전체를 direction으로 채움
-                    span_s = span_segs[0][0]
-                    span_e = span_segs[-1][1]
-                    result[span_s:span_e + 1] = [direction] * (span_e - span_s + 1)
-                    changed = True; break
+                ss, se = span[0][0], span[-1][1]
+                # 흡수 조건:
+                #   min_delta=0 → 스팬이 모두 FLAT(0)이면 연결
+                #   min_delta>0 → 스팬 전체 값 변화량 < min_delta 이면 연결
+                sd = span_delta(ss, se)
+                absorbable = (min_delta == 0 and all(d == 0 for _, _, d in span)) \
+                          or (min_delta > 0 and sd < min_delta)
+                if not absorbable: continue
+                result[ss:se + 1] = [direction] * (se - ss + 1)
+                changed = True; break
+
+    # Step3: 짧은 그룹 제거
+    final = [0] * n
+    for s, e, d in get_segs(result):
+        if d != 0 and (e - s + 1) >= min_rows:
+            final[s:e + 1] = [d] * (e - s + 1)
 
     _MAP = {1: "UP", -1: "DOWN", 0: ""}
-    return [_MAP[c] for c in result]
+    return [_MAP[c] for c in final]
+
 
 def count_groups(trends: list, direction: str) -> int:
     """연속 direction 구간 개수"""
@@ -430,35 +401,30 @@ def add_chart(ws,
               rate_up_col: int = -1, rate_dn_col: int = -1,
               chart_width: float = 420, chart_height: float = 280,
               config_text: str = "",
-              src_ws=None):
+              src_ws=None,
+              up_count: int = 0, dn_count: int = 0):
     """
     XY Scatter 차트를 ws에 추가.
-    - 주 Y축: 원본값 / UP값 / DOWN값  (XY Scatter)
-    - 보조 Y축: UP/DOWN 변화량  (XY Scatter, 보조축)
-    src_ws: 데이터가 있는 시트 (None이면 ws 자신)
-    반환: chart_obj
+    src_ws: 데이터 소스 시트 (None=ws 자신)
+    up_count/dn_count: 텍스트박스에 표시할 UP/DOWN 그룹 수
     """
     data_ws  = src_ws if src_ws is not None else ws
     data_end = data_start_row + data_rows - 1
 
-    # 동일 타이틀의 기존 차트(및 그룹) 모두 제거
+    # 동일 타이틀의 차트/그룹(차트+텍스트박스) 모두 삭제
     title_to_remove = f"{sheet_name} {chart_title}"
     to_delete = []
-    for co in ws.ChartObjects():
-        try:
-            if co.Chart.ChartTitle.Text == title_to_remove:
-                to_delete.append(co.Name)
-        except Exception:
-            pass
-    # 그룹 안에 있는 차트도 확인 (Shape 레벨)
     for sh in ws.Shapes:
         try:
-            if sh.Type == 6:   # msoGroup=6
+            t = sh.Type
+            if t == 3:     # msoChart
+                if sh.Chart.ChartTitle.Text == title_to_remove:
+                    to_delete.append(sh.Name)
+            elif t == 6:   # msoGroup — 차트+텍스트박스 그룹
                 for item in sh.GroupItems:
                     try:
                         if item.Chart.ChartTitle.Text == title_to_remove:
-                            to_delete.append(sh.Name)
-                            break
+                            to_delete.append(sh.Name); break
                     except Exception:
                         pass
         except Exception:
@@ -522,51 +488,52 @@ def add_chart(ws,
     except Exception:
         pass
 
-    # ── config 텍스트박스 + 차트 그룹화 ──────────────────────
+    # ── 텍스트박스(설정 + 그룹 개수) + 차트 그룹화 ─────────
     if config_text:
         try:
-            TB_W, TB_H = 155, 75
+            full_text = (
+                f"{config_text}\n"
+                f"UP:   {up_count}그룹\n"
+                f"DOWN: {dn_count}그룹"
+            )
+            TB_W, TB_H = 155, 90
             tb = ws.Shapes.AddTextbox(
                 1,
                 chart_obj.Left + chart_width - TB_W - 2,
                 chart_obj.Top + 2,
                 TB_W, TB_H)
-            tb.TextFrame.Characters().Text = config_text
+            tb.TextFrame.Characters().Text = full_text
             tb.TextFrame.Characters().Font.Size  = 7
             tb.TextFrame.Characters().Font.Name  = "Consolas"
             tb.Fill.Visible          = True
             tb.Fill.ForeColor.RGB    = 0xF5F5F5
             tb.Line.Visible          = True
             tb.Line.ForeColor.RGB    = 0x999999
-            # 차트 + 텍스트박스를 하나의 그룹으로 묶기
             ws.Shapes.Range([chart_obj.Name, tb.Name]).Group()
         except Exception:
             pass
 
     return chart_obj
 
-def _extract_groups(values: list, trends: list, rates: list, direction: str) -> list:
+def _extract_groups_all(values: list, trends: list, rates: list) -> list:
     """
-    direction(UP/DOWN) 구간 그룹 목록 반환.
-    각 항목: {"rate": float, "length": int}
-    rate는 그룹 내 첫 번째 유효 rate 값 사용 (그룹 내 모든 행 동일).
+    UP/DOWN 그룹을 출현 순서대로 반환.
+    각 항목: {"direction": str, "start": int, "length": int, "rate": float|""}
     """
     groups = []
     n = len(trends)
     i = 0
     while i < n:
-        if trends[i] == direction:
+        d = trends[i]
+        if d in ("UP", "DOWN"):
             j = i
-            while j < n and trends[j] == direction:
-                j += 1
-            length = j - i
-            # 그룹 내 rate 값 (첫 번째 유효값)
+            while j < n and trends[j] == d: j += 1
             rate = ""
             for k in range(i, j):
                 if k < len(rates) and isinstance(rates[k], (int, float)):
-                    rate = rates[k]
-                    break
-            groups.append({"rate": rate, "length": length})
+                    rate = rates[k]; break
+            groups.append({"direction": d, "start": i,
+                           "length": j - i, "rate": rate})
             i = j
         else:
             i += 1
@@ -576,15 +543,8 @@ def _build_result_sheet(wb, sheet_chart_infos: list, log=None):
     """
     Result 시트를 생성(또는 덮어쓰기).
 
-    테이블 구조:
-      행 1: 시트명 헤더
-      행 2~: 각 시트별 섹션
-        - 온도 UP 그룹 행들 (변화량, 길이)
-        - 온도 DOWN 그룹 행들
-        - 습도 UP 그룹 행들
-        - 습도 DOWN 그룹 행들
-
     컬럼: 시트명 | 센서 | 방향 | 그룹번호 | 길이(행) | 변화량(/min)
+    그룹번호: UP/DOWN 출현 순서 통합 카운트 (1,2,3,...)
     """
     def llog(msg):
         if log: log(msg)
@@ -608,35 +568,33 @@ def _build_result_sheet(wb, sheet_chart_infos: list, log=None):
     row = 2
 
     for info in sheet_chart_infos:
-        sname   = info["sheet_name"]
-        rates_t = info["rates_t"]
-        rates_h = info["rates_h"]
+        sname    = info["sheet_name"]
+        rates_t  = info["rates_t"]
+        rates_h  = info["rates_h"]
         trends_t = info["trends_t"]
         trends_h = info["trends_h"]
 
-        # 온도 UP/DOWN 그룹
-        for direction in ("UP", "DOWN"):
-            groups = _extract_groups(info["temp_vals"], trends_t, rates_t, direction)
-            for gi, g in enumerate(groups, 1):
-                ws_r.Cells(row, 1).Value = sname
-                ws_r.Cells(row, 2).Value = "온도"
-                ws_r.Cells(row, 3).Value = direction
-                ws_r.Cells(row, 4).Value = gi
-                ws_r.Cells(row, 5).Value = g["length"]
-                ws_r.Cells(row, 6).Value = g["rate"]
-                row += 1
+        # 온도: 출현 순서로 정렬, 그룹번호 통합 카운트
+        t_groups = _extract_groups_all(info["temp_vals"], trends_t, rates_t)
+        for gi, g in enumerate(t_groups, 1):
+            ws_r.Cells(row, 1).Value = sname
+            ws_r.Cells(row, 2).Value = "온도"
+            ws_r.Cells(row, 3).Value = g["direction"]
+            ws_r.Cells(row, 4).Value = gi
+            ws_r.Cells(row, 5).Value = g["length"]
+            ws_r.Cells(row, 6).Value = g["rate"]
+            row += 1
 
-        # 습도 UP/DOWN 그룹
-        for direction in ("UP", "DOWN"):
-            groups = _extract_groups(info["humid_vals"], trends_h, rates_h, direction)
-            for gi, g in enumerate(groups, 1):
-                ws_r.Cells(row, 1).Value = sname
-                ws_r.Cells(row, 2).Value = "습도"
-                ws_r.Cells(row, 3).Value = direction
-                ws_r.Cells(row, 4).Value = gi
-                ws_r.Cells(row, 5).Value = g["length"]
-                ws_r.Cells(row, 6).Value = g["rate"]
-                row += 1
+        # 습도: 출현 순서로 정렬, 그룹번호 통합 카운트
+        h_groups = _extract_groups_all(info["humid_vals"], trends_h, rates_h)
+        for gi, g in enumerate(h_groups, 1):
+            ws_r.Cells(row, 1).Value = sname
+            ws_r.Cells(row, 2).Value = "습도"
+            ws_r.Cells(row, 3).Value = g["direction"]
+            ws_r.Cells(row, 4).Value = gi
+            ws_r.Cells(row, 5).Value = g["length"]
+            ws_r.Cells(row, 6).Value = g["rate"]
+            row += 1
 
     table_last_row = row - 1
 
@@ -675,7 +633,9 @@ def _build_result_sheet(wb, sheet_chart_infos: list, log=None):
                           rate_dn_col=info.get("t_rate_dn_col", -1),
                           chart_width=CHART_W, chart_height=CHART_H,
                           config_text=info.get("t_cfg_text", ""),
-                          src_ws=ws_src)
+                          src_ws=ws_src,
+                          up_count=info.get("t_up_count", 0),
+                          dn_count=info.get("t_dn_count", 0))
                 chart_count += 1
             except Exception as e:
                 llog(f"  [Result] {info['sheet_name']} 온도 차트 실패: {e}")
@@ -694,7 +654,9 @@ def _build_result_sheet(wb, sheet_chart_infos: list, log=None):
                           rate_dn_col=info.get("h_rate_dn_col", -1),
                           chart_width=CHART_W, chart_height=CHART_H,
                           config_text=info.get("h_cfg_text", ""),
-                          src_ws=ws_src)
+                          src_ws=ws_src,
+                          up_count=info.get("h_up_count", 0),
+                          dn_count=info.get("h_dn_count", 0))
                 chart_count += 1
             except Exception as e:
                 llog(f"  [Result] {info['sheet_name']} 습도 차트 실패: {e}")
@@ -840,8 +802,7 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
 
             if temp_vals:
                 t_trends = analyze_trends(temp_vals,
-                                          int(t_cfg.get("min_rows", 3)),
-                                          float(t_cfg.get("min_rate_abs", 0.0)),
+                                          int(t_cfg.get("min_rows",  3)),
                                           float(t_cfg.get("min_delta", 0.0)),
                                           timestamps)
                 t_trend_col = write_trend_col(ws, header_row, data_start_row,
@@ -866,8 +827,7 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
 
             if humid_vals:
                 h_trends = analyze_trends(humid_vals,
-                                          int(h_cfg.get("min_rows", 3)),
-                                          float(h_cfg.get("min_rate_abs", 0.0)),
+                                          int(h_cfg.get("min_rows",  3)),
                                           float(h_cfg.get("min_delta", 0.0)),
                                           timestamps)
                 h_trend_col = write_trend_col(ws, header_row, data_start_row,
@@ -922,14 +882,17 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
                 "trends_h":      list(h_trends) if humid_vals else [],
                 "temp_vals":     list(temp_vals),
                 "humid_vals":    list(humid_vals),
+                "t_up_count":    _t_up,
+                "t_dn_count":    _t_down,
+                "h_up_count":    _h_up,
+                "h_dn_count":    _h_down,
             }
 
             # config 설정 텍스트 — chart_info 저장 전에 생성
             def _cfg_text(cfg):
                 return (
-                    f"min_rows:     {cfg.get('min_rows',3)}\n"
-                    f"min_rate_abs: {cfg.get('min_rate_abs',0.0)}\n"
-                    f"min_delta:    {cfg.get('min_delta',0.0)}"
+                    f"min_rows:  {cfg.get('min_rows',3)}\n"
+                    f"min_delta: {cfg.get('min_delta',0.0)}"
                 )
             t_cfg_text = _cfg_text(t_cfg)
             h_cfg_text = _cfg_text(h_cfg)
@@ -944,7 +907,8 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
                           time_axis_col, val_col_t, t_up_col, t_dn_col,
                           "온도", 10, 20,
                           rate_up_col=t_rate_up_col, rate_dn_col=t_rate_dn_col,
-                          config_text=t_cfg_text, src_ws=ws)
+                          config_text=t_cfg_text, src_ws=ws,
+                          up_count=_t_up, dn_count=_t_down)
                 log(f"  [{sheet_name}] 🌡 온도 차트 추가")
 
             if time_axis_col > 0 and humid_vals and val_col_h > 0                     and h_up_col > 0 and h_dn_col > 0:
@@ -953,7 +917,8 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
                           time_axis_col, val_col_h, h_up_col, h_dn_col,
                           "습도", 440, 20,
                           rate_up_col=h_rate_up_col, rate_dn_col=h_rate_dn_col,
-                          config_text=h_cfg_text, src_ws=ws)
+                          config_text=h_cfg_text, src_ws=ws,
+                          up_count=_h_up, dn_count=_h_down)
                 log(f"  [{sheet_name}] 💧 습도 차트 추가")
 
             if sheet_done:
@@ -1058,13 +1023,11 @@ class SensorConfigFrame(tk.LabelFrame):
                          bg=bg, fg=fg, bd=1, relief="groove",
                          labelanchor="nw", padx=8, pady=6)
         self.configure(background=bg)
-        self.min_rows_var     = tk.StringVar(value=str(init.get("min_rows",     3)))
-        self.min_rate_abs_var = tk.StringVar(value=str(init.get("min_rate_abs", 0.0)))
-        self.min_delta_var    = tk.StringVar(value=str(init.get("min_delta",    0.0)))
+        self.min_rows_var  = tk.StringVar(value=str(init.get("min_rows",  3)))
+        self.min_delta_var = tk.StringVar(value=str(init.get("min_delta", 0.0)))
         for i, (lbl, var) in enumerate([
-            ("min_rows     (유효 구간 최소 행)", self.min_rows_var),
-            ("min_rate_abs (최소 분당 변화율)",  self.min_rate_abs_var),
-            ("min_delta    (최소 값 변화량)",    self.min_delta_var),
+            ("min_rows  (유효 구간 최소 행)", self.min_rows_var),
+            ("min_delta (최소 값 변화량)",    self.min_delta_var),
         ]):
             tk.Label(self, text=lbl, font=lf, bg=bg, fg=fg,
                      anchor="e", width=22).grid(
@@ -1074,9 +1037,8 @@ class SensorConfigFrame(tk.LabelFrame):
                      relief="flat").grid(row=i, column=1, sticky="w", pady=3)
 
     def get(self):
-        return {"min_rows":     int(self.min_rows_var.get()),
-                "min_rate_abs": float(self.min_rate_abs_var.get()),
-                "min_delta":    float(self.min_delta_var.get())}
+        return {"min_rows":  int(self.min_rows_var.get()),
+                "min_delta": float(self.min_delta_var.get())}
 
 # ══════════════════════════════════════════════
 # GUI: 시트 행
@@ -1402,10 +1364,8 @@ class App(tk.Tk):
             self.config_data = cfg
             self._log(
                 f"설정 저장\n"
-                f"  🌡 temp : min_rows={cfg['temp']['min_rows']}  "
-                f"min_rate_abs={cfg['temp']['min_rate_abs']}\n"
-                f"  💧 humid: min_rows={cfg['humid']['min_rows']}  "
-                f"min_rate_abs={cfg['humid']['min_rate_abs']}")
+                f"  🌡 temp : min_rows={cfg['temp']['min_rows']}  min_delta={cfg['temp'].get('min_delta',0.0)}\n"
+                f"  💧 humid: min_rows={cfg['humid']['min_rows']}  min_delta={cfg['humid'].get('min_delta',0.0)}")
         except ValueError:
             messagebox.showerror("오류", "min_rows는 정수로 입력하세요.")
 
