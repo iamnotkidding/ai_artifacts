@@ -2,28 +2,45 @@
   "formats": {
     "format1": {
       "description": "Time, temp, humidity (헤더 1행, 데이터 2행~)",
-      "header_row": 1, "data_start_row": 2,
-      "columns": {"time":"Time","temp":"temp","humid":"humidity"}
+      "header_row": 1,
+      "data_start_row": 2,
+      "columns": {
+        "time": "Time",
+        "temp": "temp",
+        "humid": "humidity"
+      }
     },
     "format2": {
       "description": "Date, Time, temp, humid (헤더 1행, 데이터 2행~)",
-      "header_row": 1, "data_start_row": 2,
-      "columns": {"date":"Date","time":"Time","temp":"temp","humid":"humid"}
+      "header_row": 1,
+      "data_start_row": 2,
+      "columns": {
+        "date": "Date",
+        "time": "Time",
+        "temp": "temp",
+        "humid": "humid"
+      }
     },
     "format3": {
       "description": "빈칸, 시각, TEMP, HUMI (헤더 1행, 데이터 2행~)",
-      "header_row": 1, "data_start_row": 2,
-      "columns": {"index":"","time":"시각","temp":"TEMP","humid":"HUMI"}
+      "header_row": 1,
+      "data_start_row": 2,
+      "columns": {
+        "index": "",
+        "time": "시각",
+        "temp": "TEMP",
+        "humid": "HUMI"
+      }
     }
   },
   "temp": {
-    "min_rate":       0.0,
+    "min_rate": 0.0,
     "lookahead_rows": 3,
-    "noise_min_rows": 0
+    "noise_max_rows": 0
   },
   "humid": {
-    "min_rate":       0.0,
+    "min_rate": 0.0,
     "lookahead_rows": 3,
-    "noise_min_rows": 0
+    "noise_max_rows": 0
   }
 }
