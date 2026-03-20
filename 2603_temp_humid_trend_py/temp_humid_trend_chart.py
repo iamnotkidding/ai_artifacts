@@ -48,7 +48,7 @@ def analyze_trends(values: list,
     기준값: values[0]
 
     DOWN:
-      시작: 값 < 기준값  AND  |rate| >= min_rate 인 첫 행
+      시작: 값 < 기준값  AND  |rate| >= min_rate 연속 구간 길이 > noise_max_rows 인 첫 행
       시작 이후 값이 기준값 이상으로 회복되면 → 노이즈(무시)
       끝  : 최저값 탐색 반복 —
             현재 최저값에서 lookahead_rows 행 추가 확인 →
@@ -58,7 +58,7 @@ def analyze_trends(values: list,
       길이 <= noise_max_rows 이면 노이즈로 무시
 
     UP:
-      시작: DOWN 끝 이후 rate >= min_rate 인 첫 행
+      시작: DOWN 끝 이후 rate >= min_rate 연속 구간 길이 > noise_max_rows 인 첫 행
       끝  : 값 >= 기준값 이 된 행
       시작~끝 전체를 UP으로 채움
       길이 <= noise_max_rows 이면 노이즈로 무시
@@ -93,7 +93,16 @@ def analyze_trends(values: list,
     i = 1
     while i < n:
         # ── DOWN 시작 탐색 ───────────────────────────────────
+        # min_rate 연속 구간 길이가 noise_max_rows 초과여야 유효
         if values[i] < start_val and abs(get_rate(i)) >= min_rate:
+            # min_rate 연속 구간 길이 측정
+            rate_run = i
+            while rate_run + 1 < n and abs(get_rate(rate_run + 1)) >= min_rate:
+                rate_run += 1
+            rate_run_len = rate_run - i + 1
+            if noise_max_rows > 0 and rate_run_len <= noise_max_rows:
+                i += 1
+                continue
             down_start = i
 
             # ── DOWN 하강 중 기준값 회복 체크 ───────────────
@@ -143,10 +152,21 @@ def analyze_trends(values: list,
                 result[idx] = -1
 
             # ── UP 시작 탐색 ─────────────────────────────────
-            # DOWN 끝 이후 rate >= min_rate 인 첫 행
+            # DOWN 끝 이후 rate >= min_rate 이고
+            # 해당 min_rate 연속 구간 길이 > noise_max_rows 인 첫 행
             p = down_end + 1
-            while p < n and get_rate(p) < min_rate:
-                p += 1
+            while p < n:
+                if get_rate(p) >= min_rate:
+                    # min_rate 연속 구간 길이 측정
+                    rate_run_p = p
+                    while rate_run_p + 1 < n and get_rate(rate_run_p + 1) >= min_rate:
+                        rate_run_p += 1
+                    if noise_max_rows == 0 or (rate_run_p - p + 1) > noise_max_rows:
+                        break   # 유효한 UP 시작점
+                    else:
+                        p = rate_run_p + 1  # 짧은 rate 구간 건너뜀
+                else:
+                    p += 1
 
             if p < n:
                 up_start = p
