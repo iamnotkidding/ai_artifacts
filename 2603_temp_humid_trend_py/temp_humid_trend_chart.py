@@ -38,14 +38,15 @@ def save_config(cfg: dict):
 # 추세 분석
 # ══════════════════════════════════════════════
 def analyze_trends(values: list,
-                   min_rate: float      = 0.0,
-                   lookahead_rows: int  = 3,
-                   noise_max_rows: int  = 0,
-                   timestamps: list     = None) -> list:
+                   min_rate: float        = 0.0,
+                   lookahead_rows: int    = 3,
+                   noise_max_rows: int    = 0,
+                   start_tolerance: float = 0.0,
+                   timestamps: list       = None) -> list:
     """
     DOWN/UP 그룹 감지.
 
-    기준값: values[0]
+    기준값: values[0]  (비교 시 ±start_tolerance 오차 적용)
 
     DOWN:
       시작: 값 < 기준값  AND  |rate| >= min_rate 연속 구간 길이 > noise_max_rows 인 첫 행
@@ -69,14 +70,17 @@ def analyze_trends(values: list,
     파라미터:
       min_rate      : DOWN/UP 기준 최소 분당 변화율 절대값
       lookahead_rows: DOWN 끝 탐색 추가 확인 행 수
-      noise_max_rows: 노이즈 최대 행 수 — 진행 중 및 최종 제거 모두 적용 (0=미적용)
+      noise_max_rows  : 노이즈 최대 행 수 — 진행 중 및 최종 제거 모두 적용 (0=미적용)
+      start_tolerance : 기준값 비교 시 허용 오차 (start_val ± tolerance 범위)
     """
     n = len(values)
     if n == 0:
         return []
 
     ts_n = len(timestamps) if timestamps else 0
-    start_val = values[0]
+    start_val  = values[0]
+    sv_lo = start_val - start_tolerance  # DOWN 시작/탐색 기준 (이 값 미만이면 시작값 아래)
+    sv_hi = start_val + start_tolerance  # UP 끝/복귀 기준 (이 값 이상이면 기준값 복귀)
 
     def get_rate(i):
         if i <= 0: return 0.0
@@ -94,7 +98,7 @@ def analyze_trends(values: list,
     while i < n:
         # ── DOWN 시작 탐색 ───────────────────────────────────
         # min_rate 연속 구간 길이가 noise_max_rows 초과여야 유효
-        if values[i] < start_val and abs(get_rate(i)) >= min_rate:
+        if values[i] < sv_lo and abs(get_rate(i)) >= min_rate:
             # min_rate 연속 구간 길이 측정
             rate_run = i
             while rate_run + 1 < n and abs(get_rate(rate_run + 1)) >= min_rate:
@@ -110,7 +114,7 @@ def analyze_trends(values: list,
             is_noise = False
             k = i + 1
             while k < n and get_rate(k) <= -min_rate:
-                if values[k] >= start_val:
+                if values[k] >= sv_hi:
                     is_noise = True
                     break
                 k += 1
@@ -127,7 +131,7 @@ def analyze_trends(values: list,
             k = i + 1
             rising_count = 0
             while k < n:
-                if values[k] >= start_val:
+                if values[k] >= sv_hi:
                     break   # 기준값 복귀 → DOWN 끝 확정
                 if values[k] < values[valley_idx]:
                     valley_idx = k      # 새 최저값 → 계속, 상승 카운트 리셋
@@ -174,7 +178,7 @@ def analyze_trends(values: list,
                 up_end = up_start
                 q = up_start
                 while q < n:
-                    if values[q] >= start_val:
+                    if values[q] >= sv_hi:
                         up_end = q
                         break
                     q += 1
@@ -877,6 +881,14 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
             except Exception as e:
                 log(f"  [{sheet_name}] 읽기 실패: {e}"); continue
 
+            # 무시값 필터: ignore_vals 에 포함된 값을 0.0으로 대체
+            t_ignore = set(t_cfg.get("ignore_vals", []))
+            h_ignore = set(h_cfg.get("ignore_vals", []))
+            if t_ignore:
+                temp_vals  = [0.0 if v in t_ignore else v for v in temp_vals]
+            if h_ignore:
+                humid_vals = [0.0 if v in h_ignore else v for v in humid_vals]
+
             ws = wb.Sheets(sheet_name)
             sheet_done = False
             _t_up = _t_down = _h_up = _h_down = 0
@@ -916,9 +928,10 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
 
             if temp_vals:
                 t_trends = analyze_trends(temp_vals,
-                                          float(t_cfg.get("min_rate",       0.0)),
-                                          int(t_cfg.get("lookahead_rows",  3)),
-                                          int(t_cfg.get("noise_max_rows",  0)),
+                                          float(t_cfg.get("min_rate",         0.0)),
+                                          int(t_cfg.get("lookahead_rows",    3)),
+                                          int(t_cfg.get("noise_max_rows",    0)),
+                                          float(t_cfg.get("start_tolerance", 0.0)),
                                           timestamps)
                 t_trend_col = write_trend_col(ws, header_row, data_start_row,
                                               "Temp_Trend", t_trends)
@@ -942,9 +955,10 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
 
             if humid_vals:
                 h_trends = analyze_trends(humid_vals,
-                                          float(h_cfg.get("min_rate",       0.0)),
-                                          int(h_cfg.get("lookahead_rows",  3)),
-                                          int(h_cfg.get("noise_max_rows",  0)),
+                                          float(h_cfg.get("min_rate",         0.0)),
+                                          int(h_cfg.get("lookahead_rows",    3)),
+                                          int(h_cfg.get("noise_max_rows",    0)),
+                                          float(h_cfg.get("start_tolerance", 0.0)),
                                           timestamps)
                 h_trend_col = write_trend_col(ws, header_row, data_start_row,
                                               "Humid_Trend", h_trends)
@@ -1007,9 +1021,11 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
             # config 설정 텍스트 — chart_info 저장 전에 생성
             def _cfg_text(cfg):
                 return (
-                    f"min_rate:       {cfg.get('min_rate',0.0)}\n"
-                    f"lookahead_rows: {cfg.get('lookahead_rows',3)}\n"
-                    f"noise_max_rows: {cfg.get('noise_max_rows',0)}"
+                    f"min_rate:    {cfg.get('min_rate',0.0)}\n"
+                    f"look: {cfg.get('lookahead_rows',3)}  "
+                    f"noise: {cfg.get('noise_max_rows',0)}\n"
+                    f"tol: {cfg.get('start_tolerance',0.0)}  "
+                    f"ignore: {cfg.get('ignore_vals',[])}"
                 )
             t_cfg_text = _cfg_text(t_cfg)
             h_cfg_text = _cfg_text(h_cfg)
@@ -1140,25 +1156,40 @@ class SensorConfigFrame(tk.LabelFrame):
                          bg=bg, fg=fg, bd=1, relief="groove",
                          labelanchor="nw", padx=8, pady=6)
         self.configure(background=bg)
-        self.min_rate_var       = tk.StringVar(value=str(init.get("min_rate",       0.0)))
-        self.lookahead_rows_var = tk.StringVar(value=str(init.get("lookahead_rows", 3)))
-        self.noise_max_rows_var = tk.StringVar(value=str(init.get("noise_max_rows", 0)))
+        self.min_rate_var        = tk.StringVar(value=str(init.get("min_rate",        0.0)))
+        self.lookahead_rows_var  = tk.StringVar(value=str(init.get("lookahead_rows",  3)))
+        self.noise_max_rows_var  = tk.StringVar(value=str(init.get("noise_max_rows",  0)))
+        self.start_tolerance_var = tk.StringVar(value=str(init.get("start_tolerance", 0.0)))
+        self.ignore_vals_var     = tk.StringVar(value=",".join(str(v) for v in init.get("ignore_vals", [])))
         for i, (lbl, var) in enumerate([
-            ("min_rate       (기준 분당 변화율)",    self.min_rate_var),
-            ("lookahead_rows (DOWN 끝 탐색 추가행)", self.lookahead_rows_var),
-            ("noise_max_rows (노이즈 최대 행)",      self.noise_max_rows_var),
+            ("min_rate        (기준 분당 변화율)",   self.min_rate_var),
+            ("lookahead_rows  (DOWN 끝 탐색 추가행)", self.lookahead_rows_var),
+            ("noise_max_rows  (노이즈 최대 행)",     self.noise_max_rows_var),
+            ("start_tolerance (시작값 오차)",        self.start_tolerance_var),
+            ("ignore_vals     (무시값, 쉼표구분)",   self.ignore_vals_var),
         ]):
             tk.Label(self, text=lbl, font=lf, bg=bg, fg=fg,
-                     anchor="e", width=26).grid(
+                     anchor="e", width=28).grid(
                 row=i, column=0, sticky="e", padx=(0, 6), pady=3)
-            tk.Entry(self, textvariable=var, width=8,
+            tk.Entry(self, textvariable=var, width=12,
                      bg=ebg, fg=fg, insertbackground=fg,
                      relief="flat").grid(row=i, column=1, sticky="w", pady=3)
 
     def get(self):
-        return {"min_rate":       float(self.min_rate_var.get()),
-                "lookahead_rows": int(self.lookahead_rows_var.get()),
-                "noise_max_rows": int(self.noise_max_rows_var.get())}
+        # ignore_vals: 쉼표 구분 문자열 → 숫자 리스트
+        raw_ignore = self.ignore_vals_var.get().strip()
+        ignore_list = []
+        if raw_ignore:
+            for s in raw_ignore.split(","):
+                s = s.strip()
+                if s:
+                    try: ignore_list.append(float(s))
+                    except ValueError: pass
+        return {"min_rate":        float(self.min_rate_var.get()),
+                "lookahead_rows":  int(self.lookahead_rows_var.get()),
+                "noise_max_rows":  int(self.noise_max_rows_var.get()),
+                "start_tolerance": float(self.start_tolerance_var.get()),
+                "ignore_vals":     ignore_list}
 
 # ══════════════════════════════════════════════
 # GUI: 시트 행
@@ -1489,8 +1520,8 @@ class App(tk.Tk):
             self.config_data = cfg
             self._log(
                 f"설정 저장\n"
-                f"  🌡 temp : rate={cfg['temp']['min_rate']} look={cfg['temp']['lookahead_rows']} noise={cfg['temp']['noise_max_rows']}\n"
-                f"  💧 humid: rate={cfg['humid']['min_rate']} look={cfg['humid']['lookahead_rows']} noise={cfg['humid']['noise_max_rows']}")
+                f"  🌡 temp : rate={cfg['temp']['min_rate']} look={cfg['temp']['lookahead_rows']} noise={cfg['temp']['noise_max_rows']} tol={cfg['temp']['start_tolerance']} ignore={cfg['temp']['ignore_vals']}\n"
+                f"  💧 humid: rate={cfg['humid']['min_rate']} look={cfg['humid']['lookahead_rows']} noise={cfg['humid']['noise_max_rows']} tol={cfg['humid']['start_tolerance']} ignore={cfg['humid']['ignore_vals']}")
         except ValueError:
             messagebox.showerror("오류", "final_min_rows는 정수로 입력하세요.")
 
