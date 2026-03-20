@@ -110,38 +110,25 @@ def analyze_trends(values: list,
                 i = k + 1
                 continue
 
-            # ── DOWN 끝 탐색 (lookahead 반복) ────────────────
-            # 최저값 확정: lookahead 범위 내 갱신 없을 때까지 반복
-            # 탐색 중 값 >= 기준값을 만나면 그 이전의 최저값이 DOWN 끝
+            # ── DOWN 끝 탐색 ─────────────────────────────────
+            # valley 이후 값이 실제로 상승한 연속 행이 lookahead_rows 이상이면 확정
+            # 평탄(동일값)은 상승으로 카운트하지 않음
+            # 탐색 중 값 >= 기준값 만나면 그 이전 최저값이 DOWN 끝
             valley_idx = i
-            k = i
-            hit_start_val = False
-            # 먼저 |rate| >= min_rate 구간 진행
-            while k < n and abs(get_rate(k)) >= min_rate:
+            k = i + 1
+            rising_count = 0
+            while k < n:
                 if values[k] >= start_val:
-                    hit_start_val = True; break
+                    break   # 기준값 복귀 → DOWN 끝 확정
                 if values[k] < values[valley_idx]:
-                    valley_idx = k
+                    valley_idx = k      # 새 최저값 → 계속, 상승 카운트 리셋
+                    rising_count = 0
+                elif values[k] > values[valley_idx]:
+                    rising_count += 1   # 최저값보다 높아진 행
+                    if rising_count >= lookahead_rows:
+                        break           # 연속 상승 lookahead_rows 행 → 확정
+                # 동일값(flat)은 rising_count 유지
                 k += 1
-            # lookahead 반복 (기준값 미도달 시에만)
-            if not hit_start_val:
-                while True:
-                    look_end = min(k + lookahead_rows, n)
-                    new_valley = valley_idx
-                    for m in range(k, look_end):
-                        if values[m] >= start_val:
-                            look_end = m  # 기준값 만남 → 탐색 중단
-                            hit_start_val = True
-                            break
-                        if values[m] < values[new_valley]:
-                            new_valley = m
-                    if hit_start_val:
-                        break
-                    if new_valley != valley_idx:
-                        valley_idx = new_valley
-                        k = new_valley + 1
-                    else:
-                        break
 
             down_end = valley_idx
             down_len = down_end - down_start + 1
