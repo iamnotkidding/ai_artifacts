@@ -38,35 +38,37 @@ def save_config(cfg: dict):
 # 추세 분석
 # ══════════════════════════════════════════════
 def analyze_trends(values: list,
-                   min_rows: int    = 3,
-                   min_delta: float = 0.0,
-                   timestamps: list = None) -> list:
+                   noise_rate: float  = 0.0,
+                   min_rows: int      = 3,
+                   timestamps: list   = None) -> list:
     """
     UP/DOWN 추세 분석.
 
     Step1: 인접 값 비교 → UP/DOWN/FLAT 분류
            첫 행은 두 번째 행 방향 계승
-    Step2: 같은 방향 그룹 최대한 합치기 (수렴까지)
-           두 그룹 사이 스팬의 |값 변화| < min_delta 이면 흡수하여 연결
-           min_delta=0 이면 FLAT(0) 구간만 연결
-    Step3: 길이 < min_rows 인 짧은 그룹 제거
+    Step2: 노이즈 제거 — |분당변화량| < noise_rate 인 구간 FLAT으로 처리
+           noise_rate=0 이면 미적용
+    Step3: 같은 방향 그룹 합치기 (수렴까지)
+           두 그룹 사이 스팬이 모두 FLAT(0)이면 흡수하여 연결
+    Step4: 최종 길이 필터 — 길이 < min_rows 인 그룹 제거
 
     파라미터:
-      min_rows  : 유효 그룹 최소 행 수
-      min_delta : 그룹 사이 스팬 흡수 허용 최대 값 변화량 (0=FLAT만 연결)
+      noise_rate : 노이즈 기준 최소 분당 변화율 (0=미적용)
+      min_rows   : 최종 유효 그룹 최소 행 수
     """
     n = len(values)
     if n == 0:
         return []
 
-    # Step1: 분류
-    raw = [0] * n
-    for i in range(1, n):
-        dv = values[i] - values[i - 1]
-        if   dv > 0: raw[i] =  1
-        elif dv < 0: raw[i] = -1
-    if n >= 2:
-        raw[0] = raw[1]
+    ts_n = len(timestamps) if timestamps else 0
+
+    def minutes_between(i, j):
+        if i < ts_n and j < ts_n:
+            ti, tj = timestamps[i], timestamps[j]
+            if ti and tj and tj != ti:
+                dt = (tj - ti).total_seconds() / 60.0
+                return dt if dt != 0 else None
+        return None
 
     def get_segs(data):
         segs = []; i = 0
@@ -76,39 +78,50 @@ def analyze_trends(values: list,
             segs.append((i, j - 1, d)); i = j
         return segs
 
-    def span_delta(s, e):
-        """스팬 [s..e]의 전체 값 변화량 (진입 이전 기준)"""
-        v_before = values[s - 1] if s > 0 else values[s]
-        return abs(values[e] - v_before)
+    # Step1: UP/DOWN/FLAT 분류 (1=UP, -1=DOWN, 0=FLAT)
+    raw = [0] * n
+    for i in range(1, n):
+        dv = values[i] - values[i - 1]
+        if   dv > 0: raw[i] =  1
+        elif dv < 0: raw[i] = -1
+    if n >= 2:
+        raw[0] = raw[1]
 
-    # Step2: 같은 방향 최대한 합치기
-    result = raw[:]
+    # Step2: 노이즈 제거 — |분당변화량| < noise_rate 이면 FLAT으로
+    work = raw[:]
+    if noise_rate > 0.0:
+        changed = True
+        while changed:
+            changed = False
+            for s, e, d in get_segs(work):
+                if d == 0: continue
+                dt = minutes_between(s, e)
+                if dt is None: continue   # 시간 없으면 해당 구간 유지
+                rate = abs(values[e] - values[s]) / dt
+                if rate < noise_rate:
+                    work[s:e + 1] = [0] * (e - s + 1)
+                    changed = True; break
+
+    # Step3: 같은 방향 합치기 (사이 스팬이 모두 FLAT이면 흡수, 수렴까지)
     for direction in (1, -1):
         changed = True
         while changed:
             changed = False
-            segs = get_segs(result)
+            segs = get_segs(work)
             dir_idxs = [i for i, (s, e, d) in enumerate(segs) if d == direction]
             for k in range(len(dir_idxs) - 1):
                 li = dir_idxs[k]
                 ri = dir_idxs[k + 1]
                 span = segs[li + 1: ri]
-                if not span:
-                    continue
-                ss, se = span[0][0], span[-1][1]
-                # 흡수 조건:
-                #   min_delta=0 → 스팬이 모두 FLAT(0)이면 연결
-                #   min_delta>0 → 스팬 전체 값 변화량 < min_delta 이면 연결
-                sd = span_delta(ss, se)
-                absorbable = (min_delta == 0 and all(d == 0 for _, _, d in span)) \
-                          or (min_delta > 0 and sd < min_delta)
-                if not absorbable: continue
-                result[ss:se + 1] = [direction] * (se - ss + 1)
-                changed = True; break
+                if not span: continue
+                if all(d == 0 for _, _, d in span):
+                    ss, se = span[0][0], span[-1][1]
+                    work[ss:se + 1] = [direction] * (se - ss + 1)
+                    changed = True; break
 
-    # Step3: 짧은 그룹 제거
+    # Step4: 최종 길이 필터
     final = [0] * n
-    for s, e, d in get_segs(result):
+    for s, e, d in get_segs(work):
         if d != 0 and (e - s + 1) >= min_rows:
             final[s:e + 1] = [d] * (e - s + 1)
 
@@ -802,8 +815,8 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
 
             if temp_vals:
                 t_trends = analyze_trends(temp_vals,
-                                          int(t_cfg.get("min_rows",  3)),
-                                          float(t_cfg.get("min_delta", 0.0)),
+                                          float(t_cfg.get("noise_rate", 0.0)),
+                                          int(t_cfg.get("min_rows",   3)),
                                           timestamps)
                 t_trend_col = write_trend_col(ws, header_row, data_start_row,
                                               "Temp_Trend", t_trends)
@@ -827,8 +840,8 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
 
             if humid_vals:
                 h_trends = analyze_trends(humid_vals,
-                                          int(h_cfg.get("min_rows",  3)),
-                                          float(h_cfg.get("min_delta", 0.0)),
+                                          float(h_cfg.get("noise_rate", 0.0)),
+                                          int(h_cfg.get("min_rows",   3)),
                                           timestamps)
                 h_trend_col = write_trend_col(ws, header_row, data_start_row,
                                               "Humid_Trend", h_trends)
@@ -891,8 +904,8 @@ def process_all_sheets(filepath: str, sheet_cfg_map: dict,
             # config 설정 텍스트 — chart_info 저장 전에 생성
             def _cfg_text(cfg):
                 return (
-                    f"min_rows:  {cfg.get('min_rows',3)}\n"
-                    f"min_delta: {cfg.get('min_delta',0.0)}"
+                    f"noise_rate: {cfg.get('noise_rate',0.0)}\n"
+                    f"min_rows:   {cfg.get('min_rows',3)}"
                 )
             t_cfg_text = _cfg_text(t_cfg)
             h_cfg_text = _cfg_text(h_cfg)
@@ -1023,22 +1036,22 @@ class SensorConfigFrame(tk.LabelFrame):
                          bg=bg, fg=fg, bd=1, relief="groove",
                          labelanchor="nw", padx=8, pady=6)
         self.configure(background=bg)
-        self.min_rows_var  = tk.StringVar(value=str(init.get("min_rows",  3)))
-        self.min_delta_var = tk.StringVar(value=str(init.get("min_delta", 0.0)))
+        self.noise_rate_var = tk.StringVar(value=str(init.get("noise_rate", 0.0)))
+        self.min_rows_var   = tk.StringVar(value=str(init.get("min_rows",   3)))
         for i, (lbl, var) in enumerate([
-            ("min_rows  (유효 구간 최소 행)", self.min_rows_var),
-            ("min_delta (최소 값 변화량)",    self.min_delta_var),
+            ("noise_rate (노이즈 기준 분당 변화율)", self.noise_rate_var),
+            ("min_rows   (최종 최소 행)",           self.min_rows_var),
         ]):
             tk.Label(self, text=lbl, font=lf, bg=bg, fg=fg,
-                     anchor="e", width=22).grid(
+                     anchor="e", width=24).grid(
                 row=i, column=0, sticky="e", padx=(0, 6), pady=3)
             tk.Entry(self, textvariable=var, width=8,
                      bg=ebg, fg=fg, insertbackground=fg,
                      relief="flat").grid(row=i, column=1, sticky="w", pady=3)
 
     def get(self):
-        return {"min_rows":  int(self.min_rows_var.get()),
-                "min_delta": float(self.min_delta_var.get())}
+        return {"noise_rate": float(self.noise_rate_var.get()),
+                "min_rows":   int(self.min_rows_var.get())}
 
 # ══════════════════════════════════════════════
 # GUI: 시트 행
@@ -1364,8 +1377,8 @@ class App(tk.Tk):
             self.config_data = cfg
             self._log(
                 f"설정 저장\n"
-                f"  🌡 temp : min_rows={cfg['temp']['min_rows']}  min_delta={cfg['temp'].get('min_delta',0.0)}\n"
-                f"  💧 humid: min_rows={cfg['humid']['min_rows']}  min_delta={cfg['humid'].get('min_delta',0.0)}")
+                f"  🌡 temp : noise_rate={cfg['temp']['noise_rate']}  min_rows={cfg['temp']['min_rows']}\n"
+                f"  💧 humid: noise_rate={cfg['humid']['noise_rate']}  min_rows={cfg['humid']['min_rows']}")
         except ValueError:
             messagebox.showerror("오류", "min_rows는 정수로 입력하세요.")
 
