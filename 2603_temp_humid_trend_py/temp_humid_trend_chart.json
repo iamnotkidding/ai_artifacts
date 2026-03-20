@@ -18,10 +18,12 @@
   },
   "temp": {
     "min_rate":       0.0,
-    "lookahead_rows": 3
+    "lookahead_rows": 3,
+    "noise_min_rows": 0
   },
   "humid": {
     "min_rate":       0.0,
-    "lookahead_rows": 3
+    "lookahead_rows": 3,
+    "noise_min_rows": 0
   }
 }
