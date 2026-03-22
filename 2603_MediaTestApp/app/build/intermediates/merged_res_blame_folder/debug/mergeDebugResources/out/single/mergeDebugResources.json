@@ -1,0 +1,26 @@
+[
+    {
+        "merged": "com.mediatest.app-debug-36:/layout_activity_settings.xml.flat",
+        "source": "com.mediatest.app-main-38:/layout/activity_settings.xml"
+    },
+    {
+        "merged": "com.mediatest.app-debug-36:/drawable_bg_bottom_scrim.xml.flat",
+        "source": "com.mediatest.app-main-38:/drawable/bg_bottom_scrim.xml"
+    },
+    {
+        "merged": "com.mediatest.app-debug-36:/drawable_ic_launcher.xml.flat",
+        "source": "com.mediatest.app-main-38:/drawable/ic_launcher.xml"
+    },
+    {
+        "merged": "com.mediatest.app-debug-36:/layout_item_video_feed.xml.flat",
+        "source": "com.mediatest.app-main-38:/layout/item_video_feed.xml"
+    },
+    {
+        "merged": "com.mediatest.app-debug-36:/layout_activity_main.xml.flat",
+        "source": "com.mediatest.app-main-38:/layout/activity_main.xml"
+    },
+    {
+        "merged": "com.mediatest.app-debug-36:/layout_activity_test_report.xml.flat",
+        "source": "com.mediatest.app-main-38:/layout/activity_test_report.xml"
+    }
+]

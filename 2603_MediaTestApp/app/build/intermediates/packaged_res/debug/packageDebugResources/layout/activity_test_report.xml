@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#0D0D0D">
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:padding="16dp">
+        <TextView
+            android:id="@+id/tvSummary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#E0E0E0"
+            android:textSize="13sp"
+            android:fontFamily="monospace"
+            android:background="#1A1A2E"
+            android:padding="16dp" />
+    </ScrollView>
+
+    <View android:layout_width="match_parent" android:layout_height="1dp"
+        android:background="#333333" />
+
+    <TextView android:text="  ▶ EVENT LOG"
+        android:textColor="#AAAAAA" android:textSize="11sp"
+        android:padding="8dp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content" />
+
+    <ListView
+        android:id="@+id/listLog"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="2"
+        android:dividerHeight="0dp" />
+</LinearLayout>

@@ -1,0 +1,5 @@
+com.mediatest.app.test-androidTest-0 C:\github\code_samples\2603_MediaTestApp\app\build\generated\res\resValues\androidTest\debug
+com.mediatest.app.test-updated_navigation_xml-1 C:\github\code_samples\2603_MediaTestApp\app\build\generated\updated_navigation_xml\debugAndroidTest
+com.mediatest.app.test-mergeDebugAndroidTestResources-2 C:\github\code_samples\2603_MediaTestApp\app\build\intermediates\incremental\debugAndroidTest\mergeDebugAndroidTestResources\merged.dir
+com.mediatest.app.test-mergeDebugAndroidTestResources-3 C:\github\code_samples\2603_MediaTestApp\app\build\intermediates\incremental\debugAndroidTest\mergeDebugAndroidTestResources\stripped.dir
+com.mediatest.app.test-debugAndroidTest-4 C:\github\code_samples\2603_MediaTestApp\app\build\intermediates\merged_res\debugAndroidTest\mergeDebugAndroidTestResources

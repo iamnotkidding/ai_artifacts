@@ -1,0 +1,8 @@
+com.mediatest.app-pngs-0 C:\github\code_samples\2603_MediaTestApp\app\build\generated\res\pngs\debug
+com.mediatest.app-resValues-1 C:\github\code_samples\2603_MediaTestApp\app\build\generated\res\resValues\debug
+com.mediatest.app-updated_navigation_xml-2 C:\github\code_samples\2603_MediaTestApp\app\build\generated\updated_navigation_xml\debug
+com.mediatest.app-packageDebugResources-3 C:\github\code_samples\2603_MediaTestApp\app\build\intermediates\incremental\debug\packageDebugResources\merged.dir
+com.mediatest.app-packageDebugResources-4 C:\github\code_samples\2603_MediaTestApp\app\build\intermediates\incremental\debug\packageDebugResources\stripped.dir
+com.mediatest.app-debug-5 C:\github\code_samples\2603_MediaTestApp\app\build\intermediates\merged_res\debug\mergeDebugResources
+com.mediatest.app-debug-6 C:\github\code_samples\2603_MediaTestApp\app\src\debug\res
+com.mediatest.app-main-7 C:\github\code_samples\2603_MediaTestApp\app\src\main\res

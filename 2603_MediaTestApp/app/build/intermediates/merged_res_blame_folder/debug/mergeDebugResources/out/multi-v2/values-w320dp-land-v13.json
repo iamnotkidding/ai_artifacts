@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.mediatest.app-mergeDebugResources-34:/values-w320dp-land-v13/values-w320dp-land-v13.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\inkso\\.gradle\\caches\\9.3.1\\transforms\\4439e148777ddd43c52b0c9b536cff1a\\workspace\\transformed\\material-1.10.0\\res\\values-w320dp-land-v13\\values-w320dp-land-v13.xml",
+                    "from": {
+                        "startLines": "2,3",
+                        "startColumns": "4,4",
+                        "startOffsets": "55,110",
+                        "endColumns": "54,61",
+                        "endOffsets": "105,167"
+                    }
+                }
+            ]
+        }
+    ]
+}

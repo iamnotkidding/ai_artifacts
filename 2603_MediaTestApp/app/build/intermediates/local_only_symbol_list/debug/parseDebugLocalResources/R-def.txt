@@ -1,0 +1,34 @@
+R_DEF: Internal format may change without notice
+local
+drawable bg_bottom_scrim
+drawable ic_launcher
+id btnAutoScroll
+id btnPip
+id btnReport
+id btnRotate
+id btnSaveSettings
+id btnSettings
+id controlStrip
+id listLog
+id loadingView
+id playerView
+id sbPipInterval
+id sbRotateInterval
+id sbScrollInterval
+id sbZoomInterval
+id testOverlayView
+id tvBitrate
+id tvFormat
+id tvFormatBadge
+id tvPipVal
+id tvRotateVal
+id tvScrollVal
+id tvSummary
+id tvTitle
+id tvZoomVal
+id videoFeedRecycler
+layout activity_main
+layout activity_settings
+layout activity_test_report
+layout item_video_feed
+style AppTheme

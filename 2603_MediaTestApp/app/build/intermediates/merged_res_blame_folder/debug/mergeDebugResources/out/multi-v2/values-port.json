@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.mediatest.app-mergeDebugResources-34:/values-port/values-port.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\inkso\\.gradle\\caches\\9.3.1\\transforms\\e32e3b5c9fc555f20c204ef7026e2f51\\workspace\\transformed\\appcompat-1.6.1\\res\\values-port\\values-port.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "55",
+                        "endOffsets": "106"
+                    }
+                }
+            ]
+        }
+    ]
+}
