@@ -4,6 +4,7 @@ package com.qa.myphoto
 import android.Manifest
 import android.content.ContentUris
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.view.WindowManager
@@ -82,13 +83,28 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun PermissionCheck(content: @Composable () -> Unit) {
     var granted by remember { mutableStateOf(false) }
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        granted = it.values.all { g -> g }
+    
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+        granted = permissions.values.all { it }
     }
+    
     LaunchedEffect(Unit) {
-        launcher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO))
+        // [해결 1] 안드로이드 기기 버전별 권한 분기 처리 (무한 대기 및 크래시 방지)
+        val permissionsToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
+        } else {
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        launcher.launch(permissionsToRequest)
     }
-    if (granted) content() else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+    
+    if (granted) {
+        content()
+    } else {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { 
+            CircularProgressIndicator() 
+        }
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -96,34 +112,52 @@ fun PermissionCheck(content: @Composable () -> Unit) {
 fun MainGalleryApp() {
     val context = LocalContext.current
     val tabs = listOf("전체", "사진", "동영상")
-    val videoImageLoader = remember { ImageLoader.Builder(context).components { add(VideoFrameDecoder.Factory()) }.build() }
+    
+    val videoImageLoader = remember { 
+        ImageLoader.Builder(context)
+            .components { add(VideoFrameDecoder.Factory()) }
+            .memoryCachePolicy(CachePolicy.ENABLED)
+            .diskCachePolicy(CachePolicy.ENABLED)
+            .build() 
+    }
+    
     val pagerState = rememberPagerState(pageCount = { tabs.size })
     val scope = rememberCoroutineScope()
     
-    // 레이아웃 단수(열 개수) 상태
     var columnCount by remember { mutableIntStateOf(3) }
+    var isAutoScrollEnabled by remember { mutableStateOf(false) }
     val totalMedia = remember { mutableStateListOf<GalleryMedia>() }
 
     LaunchedEffect(Unit) {
         launch(Dispatchers.IO) {
             val localItems = mutableListOf<GalleryMedia>()
             val projection = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.WIDTH, MediaStore.MediaColumns.HEIGHT)
-            context.contentResolver.query(MediaStore.Files.getContentUri("external"), projection, null, null, null)?.use { cursor ->
-                val idCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-                val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
-                val wCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.WIDTH)
-                val hCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.HEIGHT)
-                while (cursor.moveToNext()) {
-                    val id = cursor.getLong(idCol)
-                    val w = cursor.getInt(wCol).coerceAtLeast(1)
-                    val h = cursor.getInt(hCol).coerceAtLeast(1)
-                    val isVideo = (cursor.getString(mimeCol) ?: "").startsWith("video")
-                    val uri = ContentUris.withAppendedId(if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+            
+            // [해결 2] MediaStore 쿼리 중 발생할 수 있는 크래시를 방지하기 위해 try-catch 적용
+            try {
+                context.contentResolver.query(MediaStore.Files.getContentUri("external"), projection, null, null, null)?.use { cursor ->
+                    val idCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                    val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+                    val wCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.WIDTH)
+                    val hCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.HEIGHT)
                     
-                    localItems.add(GalleryMedia("local_$id", uri, isVideo, "${w}x${h}", w.toFloat() / h > 1.3f))
+                    while (cursor.moveToNext()) {
+                        val id = cursor.getLong(idCol)
+                        val w = cursor.getInt(wCol).coerceAtLeast(1)
+                        val h = cursor.getInt(hCol).coerceAtLeast(1)
+                        val isVideo = (cursor.getString(mimeCol) ?: "").startsWith("video")
+                        val uri = ContentUris.withAppendedId(if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                        
+                        localItems.add(GalleryMedia("local_$id", uri, isVideo, "${w}x${h}", w.toFloat() / h > 1.3f))
+                    }
                 }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-            withContext(Dispatchers.Main) { totalMedia.addAll(localItems) }
+            
+            withContext(Dispatchers.Main) { 
+                totalMedia.addAll(localItems) 
+            }
         }
     }
 
@@ -141,6 +175,11 @@ fun MainGalleryApp() {
                     IconButton(onClick = { if (columnCount < 5) columnCount++ }) { Icon(Icons.Default.Remove, "작게 보기") }
                     Text("레이아웃 ${columnCount}단", fontSize = 16.sp, modifier = Modifier.padding(horizontal = 16.dp))
                     IconButton(onClick = { if (columnCount > 1) columnCount-- }) { Icon(Icons.Default.Add, "크게 보기") }
+                    
+                    Spacer(modifier = Modifier.weight(1f))
+                    Button(onClick = { isAutoScrollEnabled = !isAutoScrollEnabled }) {
+                        Text(if (isAutoScrollEnabled) "스크롤 중단" else "자동 스크롤")
+                    }
                 }
             }
         }
@@ -149,15 +188,19 @@ fun MainGalleryApp() {
             state = pagerState, 
             modifier = Modifier.padding(padding).fillMaxSize()
         ) { pageIdx ->
-            val filtered = when (pageIdx) {
-                1 -> totalMedia.filter { !it.isVideo }
-                2 -> totalMedia.filter { it.isVideo }
-                else -> totalMedia
+            val filtered = remember(pageIdx, totalMedia.size) {
+                when (pageIdx) {
+                    1 -> totalMedia.filter { !it.isVideo }
+                    2 -> totalMedia.filter { it.isVideo }
+                    else -> totalMedia
+                }
             }
             
             StrictGaplessRowGrid(
                 items = filtered,
                 displayColumns = columnCount,
+                isAutoScroll = isAutoScrollEnabled,
+                onManualInteraction = { isAutoScrollEnabled = false },
                 imageLoader = videoImageLoader
             )
         }
@@ -165,16 +208,15 @@ fun MainGalleryApp() {
 }
 
 @Composable
-fun StrictGaplessRowGrid(items: List<GalleryMedia>, displayColumns: Int, imageLoader: ImageLoader) {
+fun StrictGaplessRowGrid(items: List<GalleryMedia>, displayColumns: Int, isAutoScroll: Boolean, onManualInteraction: () -> Unit, imageLoader: ImageLoader) {
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
+    var scrollDirection by remember { mutableIntStateOf(1) }
     var activeVideoId by remember { mutableStateOf<String?>(null) }
     
-    // 그리드 세분화: 가로를 60칸으로 쪼개서 비율을 유동적으로 분배 (1, 2, 3, 4, 5의 공배수)
     val totalGridCells = 60 
 
-    // [핵심 변경] 버전 충돌이 없는 사전 계산(Pre-calculated) 레이아웃 방식
-    // 아이템이 렌더링되기 전에 각 아이템이 차지할 Span(가로 칸 수)을 미리 계산하여 빈 공간을 강제로 없앱니다.
+    // 아이템 배치 계산 로직의 안정성 확보
     val itemSpans = remember(items, displayColumns) {
         val spans = IntArray(items.size)
         var currentLineSpan = 0
@@ -191,13 +233,26 @@ fun StrictGaplessRowGrid(items: List<GalleryMedia>, displayColumns: Int, imageLo
             val remainingInLine = totalGridCells - currentLineSpan
             val isLastItem = i == items.lastIndex
             
-            // 남은 공간이 선호하는 폭보다 작거나, 마지막 아이템인 경우 무조건 남은 칸을 100% 채움
             val actualSpan = if (remainingInLine < preferredSpan || isLastItem) remainingInLine else preferredSpan
-            
             spans[i] = actualSpan
             currentLineSpan = (currentLineSpan + actualSpan) % totalGridCells
         }
         spans
+    }
+
+    LaunchedEffect(isAutoScroll, scrollDirection) {
+        if (isAutoScroll) {
+            while (isActive) {
+                if (scrollDirection == 1 && !gridState.canScrollForward) scrollDirection = -1
+                else if (scrollDirection == -1 && !gridState.canScrollBackward) scrollDirection = 1
+                gridState.scrollBy(3f * scrollDirection)
+                delay(16)
+            }
+        }
+    }
+
+    LaunchedEffect(gridState.isScrollInProgress) {
+        if (gridState.isScrollInProgress) onManualInteraction()
     }
 
     val centerVideoId by remember {
@@ -224,13 +279,9 @@ fun StrictGaplessRowGrid(items: List<GalleryMedia>, displayColumns: Int, imageLo
             itemsIndexed(
                 items = items,
                 key = { _, item -> item.id },
-                span = { index, _ -> 
-                    // 사전에 계산된 완벽한 맞춤형 Span을 반환
-                    GridItemSpan(itemSpans[index]) 
-                }
+                span = { index, _ -> GridItemSpan(itemSpans[index]) }
             ) { _, item ->
                 val isPlaying = item.id == activeVideoId || (activeVideoId == null && item.id == centerVideoId)
-                // 행 높이 계산 (단수에 반비례하여 일정하게 유지)
                 val rowHeight = (360 / displayColumns).dp
                 
                 Box(Modifier.height(rowHeight)) {
@@ -244,7 +295,6 @@ fun StrictGaplessRowGrid(items: List<GalleryMedia>, displayColumns: Int, imageLo
             }
         }
 
-        // 상하 퀵 이동 버튼
         Column(
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -280,7 +330,6 @@ fun ZoomableMediaCard(
             .fillMaxSize()
             .zIndex(if (scale > 1f) 1f else 0f)
             .pointerInput(Unit) {
-                // 1손가락 스크롤과 2손가락 줌 충돌 방지
                 detectTwoFingerGesture { pan, zoom ->
                     scale = (scale * zoom).coerceIn(1f, 4f)
                     if (scale > 1f) offset += pan else offset = Offset.Zero
@@ -304,7 +353,7 @@ fun ZoomableMediaCard(
                 model = ImageRequest.Builder(context).data(item.uri).memoryCachePolicy(CachePolicy.ENABLED).crossfade(200).build(),
                 imageLoader = imageLoader,
                 contentDescription = null,
-                contentScale = ContentScale.Crop, // 공간에 맞춰 찌그러짐 없이 꽉 채우기
+                contentScale = ContentScale.Crop, 
                 modifier = Modifier.fillMaxSize()
             )
             
