@@ -1,6 +1,8 @@
 package com.qa.myphoto
 
 
+package com.example.photogallery
+
 import android.Manifest
 import android.content.ContentUris
 import android.net.Uri
@@ -13,7 +15,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
 import androidx.compose.animation.*
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.scrollBy
@@ -29,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -63,15 +65,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        val initialTabName = intent.getStringExtra("tab_name") ?: "전체"
-        val initialAutoScroll = intent.getBooleanExtra("auto_scroll", false)
-        val initialZoomLevel = intent.getIntExtra("zoom_level", 3).coerceIn(1, 5)
-
         setContent {
             MaterialTheme {
                 PermissionCheck {
                     Surface(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-                        MainGalleryApp(initialTabName, initialAutoScroll, initialZoomLevel)
+                        MainGalleryApp()
                     }
                 }
             }
@@ -93,13 +91,17 @@ fun PermissionCheck(content: @Composable () -> Unit) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean, initialZoom: Int) {
+fun MainGalleryApp() {
     val context = LocalContext.current
     val tabs = listOf("전체", "사진", "동영상", "단말", "온라인")
     val videoImageLoader = remember { ImageLoader.Builder(context).components { add(VideoFrameDecoder.Factory()) }.build() }
-    val pagerState = rememberPagerState(initialPage = tabs.indexOf(initialTab).coerceAtLeast(0), pageCount = { tabs.size })
+    val pagerState = rememberPagerState(pageCount = { tabs.size })
     val scope = rememberCoroutineScope()
-    var isAutoScrollEnabled by remember { mutableStateOf(initialAutoScroll) }
+    
+    // 상태 관리: 자동 스크롤 여부 및 레이아웃 레벨(칸 수)
+    var isAutoScrollEnabled by remember { mutableStateOf(false) }
+    var columnCount by remember { mutableIntStateOf(3) }
+    
     val totalMedia = remember { mutableStateListOf<GalleryMedia>() }
 
     LaunchedEffect(Unit) {
@@ -135,43 +137,49 @@ fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean, initialZoom: 
                         }
                     }
                 }
-                Button(onClick = { isAutoScrollEnabled = !isAutoScrollEnabled }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                    Text(if (isAutoScrollEnabled) "자동 스크롤 중" else "자동 스크롤 시작")
+                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // [반영] 레이아웃 변경 버튼
+                    IconButton(onClick = { if (columnCount < 5) columnCount++ }) { Icon(Icons.Default.Remove, "작게 보기") }
+                    Text("$columnCount 칸", modifier = Modifier.padding(horizontal = 8.dp))
+                    IconButton(onClick = { if (columnCount > 1) columnCount-- }) { Icon(Icons.Default.Add, "크게 보기") }
+                    
+                    Spacer(Modifier.weight(1f))
+                    
+                    // [반영] 자동 스크롤 버튼 (상태와 연동)
+                    Button(onClick = { isAutoScrollEnabled = !isAutoScrollEnabled }) {
+                        Text(if (isAutoScrollEnabled) "스크롤 중지" else "자동 스크롤 시작")
+                    }
                 }
             }
         }
     ) { padding ->
-        // [반영] 한 손가락 좌우 스와이프로 탭 이동
-        HorizontalPager(
-            state = pagerState, 
-            modifier = Modifier.padding(padding).fillMaxSize(),
-            userScrollEnabled = true 
-        ) { pageIdx ->
+        HorizontalPager(state = pagerState, modifier = Modifier.padding(padding).fillMaxSize()) { pageIdx ->
             val filtered = when (pageIdx) {
                 1 -> totalMedia.filter { !it.isVideo }
                 2 -> totalMedia.filter { it.isVideo }
                 else -> totalMedia
             }
-            ComfortableGrid(filtered, isAutoScrollEnabled, videoImageLoader, initialZoom)
+            // 그리드 구현
+            GalleryGrid(
+                items = filtered, 
+                isAutoScroll = isAutoScrollEnabled, 
+                columns = columnCount, 
+                imageLoader = videoImageLoader,
+                onManualInteraction = { isAutoScrollEnabled = false } // [반영] 터치 시 자동 스크롤 버튼 업데이트용
+            )
         }
     }
 }
 
 @Composable
-fun ComfortableGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageLoader: ImageLoader, initialColumns: Int) {
+fun GalleryGrid(items: List<GalleryMedia>, isAutoScroll: Boolean, columns: Int, imageLoader: ImageLoader, onManualInteraction: () -> Unit) {
     val gridState = rememberLazyStaggeredGridState()
-    val scope = rememberCoroutineScope()
-    
-    // [반영] 두 손가락 줌으로 레이아웃 레벨(열 개수) 변경
-    var columnCount by remember { mutableFloatStateOf(initialColumns.toFloat()) }
-    val displayColumns = columnCount.toInt().coerceIn(1, 5)
-    
     var scrollDirection by remember { mutableIntStateOf(1) }
     var manualPlayId by remember { mutableStateOf<String?>(null) }
 
-    // 자동 왕복 스크롤
-    LaunchedEffect(isEnabled, scrollDirection) {
-        if (isEnabled) {
+    // 자동 스크롤 로직
+    LaunchedEffect(isAutoScroll, scrollDirection) {
+        if (isAutoScroll) {
             while (isActive) {
                 if (scrollDirection == 1 && !gridState.canScrollForward) scrollDirection = -1
                 else if (scrollDirection == -1 && !gridState.canScrollBackward) scrollDirection = 1
@@ -181,7 +189,11 @@ fun ComfortableGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageLoader: 
         }
     }
 
-    // 화면 중앙 가시성 기반 자동 재생
+    // 터치 발생 시 상위 앱의 자동 스크롤 버튼 상태를 끔
+    LaunchedEffect(gridState.isScrollInProgress) {
+        if (gridState.isScrollInProgress) onManualInteraction()
+    }
+
     val activeVideoId by remember {
         derivedStateOf {
             val layoutInfo = gridState.layoutInfo
@@ -189,42 +201,25 @@ fun ComfortableGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageLoader: 
             if (visibleItems.isEmpty()) return@derivedStateOf null
             visibleItems.firstOrNull { info ->
                 val isVideo = items.getOrNull(info.index)?.isVideo == true
-                val isFullyVisible = info.offset.y >= layoutInfo.viewportStartOffset && (info.offset.y + info.size.height) <= layoutInfo.viewportEndOffset
-                isVideo && isFullyVisible
+                isVideo && info.offset.y >= layoutInfo.viewportStartOffset && (info.offset.y + info.size.height) <= layoutInfo.viewportEndOffset
             }?.key.toString()
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        LazyVerticalStaggeredGrid(
-            state = gridState,
-            columns = StaggeredGridCells.Fixed(displayColumns),
-            modifier = Modifier
-                .fillMaxSize()
-                // [반영] 사진/동영상 위에서도 동작하는 줌 제스처
-                .pointerInput(Unit) {
-                    detectTransformGestures { _, _, zoom, _ ->
-                        columnCount = (columnCount / zoom).coerceIn(1f, 5.9f)
-                    }
-                },
-            contentPadding = PaddingValues(1.dp),
-            verticalItemSpacing = 1.dp,
-            horizontalArrangement = Arrangement.spacedBy(1.dp)
-        ) {
-            items(items, key = { it.id }, span = { item ->
-                // 가로 크기 다양화 (비율 기반)
-                if (item.isWide && displayColumns > 1) StaggeredGridItemSpan.FullLine else StaggeredGridItemSpan.SingleLane
-            }) { item ->
-                val isPlaying = item.id == manualPlayId || (manualPlayId == null && item.id == activeVideoId)
-                GaplessMediaCard(item, isPlaying, imageLoader) {
-                    manualPlayId = if (manualPlayId == item.id) null else item.id
-                }
-            }
-        }
-
-        if (gridState.firstVisibleItemIndex > 2) {
-            FloatingActionButton(onClick = { scope.launch { gridState.animateScrollToItem(0) } }, modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).size(44.dp)) {
-                Icon(Icons.Default.ArrowUpward, null)
+    LazyVerticalStaggeredGrid(
+        state = gridState,
+        columns = StaggeredGridCells.Fixed(columns),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(1.dp),
+        verticalItemSpacing = 1.dp,
+        horizontalArrangement = Arrangement.spacedBy(1.dp)
+    ) {
+        items(items, key = { it.id }, span = { item ->
+            if (item.isWide && columns > 1) StaggeredGridItemSpan.FullLine else StaggeredGridItemSpan.SingleLane
+        }) { item ->
+            val isPlaying = item.id == manualPlayId || (manualPlayId == null && item.id == activeVideoId)
+            ZoomableMediaCard(item, isPlaying, imageLoader) {
+                manualPlayId = if (manualPlayId == item.id) null else item.id
             }
         }
     }
@@ -232,13 +227,29 @@ fun ComfortableGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageLoader: 
 
 @OptIn(UnstableApi::class)
 @Composable
-fun GaplessMediaCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: ImageLoader, onPlayClick: () -> Unit) {
+fun ZoomableMediaCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: ImageLoader, onPlayClick: () -> Unit) {
     val context = LocalContext.current
-    Card(modifier = Modifier.fillMaxWidth().wrapContentHeight(), shape = RectangleShape) {
+    
+    // [반영] 개별 사진/동영상 확대/축소용 상태
+    var scale by remember { mutableFloatStateOf(1f) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .wrapContentHeight()
+            // [반영] 줌 인 아웃 터치 동작 추가
+            .pointerInput(Unit) {
+                detectTransformGestures { _, _, zoom, _ ->
+                    scale = (scale * zoom).coerceIn(1f, 3f)
+                }
+            }
+            .graphicsLayer(scaleX = scale, scaleY = scale),
+        shape = RectangleShape
+    ) {
         Box(modifier = Modifier.aspectRatio(item.ratio), contentAlignment = Alignment.Center) {
-            // [깜빡임 해결] 썸네일을 항상 배경에 깔아둠
+            // 배경 썸네일
             AsyncImage(
-                model = ImageRequest.Builder(context).data(item.uri).memoryCachePolicy(CachePolicy.ENABLED).crossfade(200).build(),
+                model = ImageRequest.Builder(context).data(item.uri).memoryCachePolicy(CachePolicy.ENABLED).crossfade(true).build(),
                 imageLoader = imageLoader,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
@@ -247,6 +258,7 @@ fun GaplessMediaCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: ImageL
             
             if (item.isVideo) {
                 if (isPlaying) {
+                    // [반영] 자동 재생 중에도 확대 축소 유지 (scale이 적용된 graphicsLayer 내부)
                     VideoPlayerCore(item.uri)
                 } else {
                     Icon(Icons.Default.VideoCameraBack, null, tint = Color.White.copy(0.7f), modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(18.dp))
@@ -280,7 +292,7 @@ fun VideoPlayerCore(uri: Uri) {
                 player = exoPlayer
                 useController = false
                 resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                setShutterBackgroundColor(android.graphics.Color.TRANSPARENT) // [깜빡임 해결]
+                setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
             }
         },
         modifier = Modifier.fillMaxSize()
