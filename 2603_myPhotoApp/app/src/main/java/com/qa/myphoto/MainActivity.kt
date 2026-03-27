@@ -47,8 +47,9 @@ import coil.decode.VideoFrameDecoder
 import coil.request.CachePolicy
 import coil.request.ImageRequest
 import kotlinx.coroutines.*
+import kotlin.math.abs
 
-// [데이터 모델]
+// [데이터 모델] Comfortable 배치를 위한 가로/세로 비율 및 Span 정보 포함
 data class GalleryMedia(
     val id: String,
     val uri: Uri,
@@ -56,14 +57,16 @@ data class GalleryMedia(
     val isOnline: Boolean,
     val ratio: Float,
     val resolutionText: String,
-    val isWide: Boolean // 가로 점유율 결정 인자
+    val isWide: Boolean
 )
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 앱 실행 중 화면 꺼짐 방지
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        // Intent 파라미터 수신 (기본값 설정)
         val initialTabName = intent.getStringExtra("tab_name") ?: "전체"
         val initialAutoScroll = intent.getBooleanExtra("auto_scroll", false)
         val initialZoomLevel = intent.getIntExtra("zoom_level", 3).coerceIn(1, 5)
@@ -103,6 +106,7 @@ fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean, initialZoom: 
     var isAutoScrollEnabled by remember { mutableStateOf(initialAutoScroll) }
     val totalMedia = remember { mutableStateListOf<GalleryMedia>() }
 
+    // 데이터 로드: 로컬 우선 -> 온라인 비동기 추가
     LaunchedEffect(Unit) {
         launch(Dispatchers.IO) {
             val localItems = mutableListOf<GalleryMedia>()
@@ -120,16 +124,16 @@ fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean, initialZoom: 
                     val isVideo = (cursor.getString(mimeCol) ?: "").startsWith("video")
                     val uri = ContentUris.withAppendedId(if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
                     
-                    // [반영] 가로가 충분히 길면(1.5배 이상) Wide 속성 부여
-                    localItems.add(GalleryMedia("local_$id", uri, isVideo, false, ratio, "${w}x${h}", ratio > 1.5f))
+                    // 비율이 1.4 이상이면 와이드 파일로 분류
+                    localItems.add(GalleryMedia("local_$id", uri, isVideo, false, ratio, "${w}x${h}", ratio > 1.4f))
                 }
             }
             withContext(Dispatchers.Main) { totalMedia.addAll(localItems) }
         }
-        // 온라인 샘플 (와이드 비율 포함)
+        // 온라인 파일 예시
         launch(Dispatchers.IO) {
-            delay(1000)
-            val remoteItems = List(6) { i -> GalleryMedia("online_$i", Uri.parse("https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"), true, true, 1.77f, "1920x1080", true) }
+            delay(1200)
+            val remoteItems = List(8) { i -> GalleryMedia("online_$i", Uri.parse("https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"), true, true, 1.77f, "1920x1080", true) }
             withContext(Dispatchers.Main) { totalMedia.addAll(remoteItems) }
         }
     }
@@ -144,29 +148,28 @@ fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean, initialZoom: 
                         }
                     }
                 }
-                Button(onClick = { isAutoScrollEnabled = !isAutoScrollEnabled }, modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+                Button(onClick = { isAutoScrollEnabled = !isAutoScrollEnabled }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
                     Text(if (isAutoScrollEnabled) "자동 왕복 스크롤 중지" else "자동 왕복 스크롤 시작")
                 }
             }
         }
     ) { padding ->
+        // 한 손가락 좌우 스와이프로 탭 전환
         HorizontalPager(state = pagerState, modifier = Modifier.padding(padding).fillMaxSize()) { pageIdx ->
-            val filtered = remember(pageIdx, totalMedia.size) {
-                when (pageIdx) {
-                    1 -> totalMedia.filter { !it.isVideo }
-                    2 -> totalMedia.filter { it.isVideo }
-                    3 -> totalMedia.filter { !it.isOnline }
-                    4 -> totalMedia.filter { it.isOnline }
-                    else -> totalMedia
-                }
+            val filtered = when (pageIdx) {
+                1 -> totalMedia.filter { !it.isVideo }
+                2 -> totalMedia.filter { it.isVideo }
+                3 -> totalMedia.filter { !it.isOnline }
+                4 -> totalMedia.filter { it.isOnline }
+                else -> totalMedia
             }
-            ComfortableIrregularGrid(filtered, isAutoScrollEnabled, videoImageLoader, initialZoom)
+            ComfortableGaplessGrid(filtered, isAutoScrollEnabled, videoImageLoader, initialZoom)
         }
     }
 }
 
 @Composable
-fun ComfortableIrregularGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageLoader: ImageLoader, initialColumns: Int) {
+fun ComfortableGaplessGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageLoader: ImageLoader, initialColumns: Int) {
     val gridState = rememberLazyStaggeredGridState()
     val scope = rememberCoroutineScope()
     var columnCount by remember { mutableFloatStateOf(initialColumns.toFloat()) }
@@ -174,7 +177,7 @@ fun ComfortableIrregularGrid(items: List<GalleryMedia>, isEnabled: Boolean, imag
     var scrollDirection by remember { mutableIntStateOf(1) }
     var manualPlayId by remember { mutableStateOf<String?>(null) }
 
-    // 자동 왕복 스크롤
+    // 자동 왕복 스크롤 (수동 조작 병행 가능)
     LaunchedEffect(isEnabled, scrollDirection) {
         if (isEnabled) {
             while (isActive) {
@@ -186,15 +189,19 @@ fun ComfortableIrregularGrid(items: List<GalleryMedia>, isEnabled: Boolean, imag
         }
     }
 
-    // 중앙 가시성 기반 자동 재생 감지
+    // 화면 중앙 가시성 기준 자동 재생 감지
     val activeVideoId by remember {
         derivedStateOf {
             val layoutInfo = gridState.layoutInfo
             val visibleItems = layoutInfo.visibleItemsInfo
             if (visibleItems.isEmpty()) return@derivedStateOf null
+            val viewportStart = layoutInfo.viewportStartOffset
+            val viewportEnd = layoutInfo.viewportEndOffset
+
             visibleItems.firstOrNull { info ->
                 val isVideo = items.getOrNull(info.index)?.isVideo == true
-                isVideo && info.offset.y >= layoutInfo.viewportStartOffset && (info.offset.y + info.size.height) <= layoutInfo.viewportEndOffset
+                val isFullyVisible = info.offset.y >= viewportStart && (info.offset.y + info.size.height) <= viewportEnd
+                isVideo && isFullyVisible
             }?.key.toString()
         }
     }
@@ -215,22 +222,17 @@ fun ComfortableIrregularGrid(items: List<GalleryMedia>, isEnabled: Boolean, imag
             horizontalArrangement = Arrangement.spacedBy(1.dp)
         ) {
             items(items, key = { it.id }, span = { item ->
-                // [반영] 가로 크기도 다양하게 배치: 
-                // 와이드 이미지이며 현재 열 개수가 2개 이상일 때 2칸(Lane)을 차지하게 함
-                if (item.isWide && displayColumns > 1) {
-                    StaggeredGridItemSpan.FullLine 
-                } else {
-                    StaggeredGridItemSpan.SingleLane
-                }
+                // [핵심] 가로가 긴 파일은 열 개수가 2개 이상일 때 2칸을 채우도록 다양하게 배치
+                if (item.isWide && displayColumns > 1) StaggeredGridItemSpan.FullLine else StaggeredGridItemSpan.SingleLane
             }) { item ->
                 val isPlaying = item.id == manualPlayId || (manualPlayId == null && item.id == activeVideoId)
-                GaplessMediaCard(item, isPlaying, imageLoader) {
+                ComfortableMediaCard(item, isPlaying, imageLoader) {
                     manualPlayId = if (manualPlayId == item.id) null else item.id
                 }
             }
         }
 
-        // 퀵 이동 버튼
+        // 퀵 네비게이션 버튼
         if (gridState.firstVisibleItemIndex > 2) {
             FloatingActionButton(
                 onClick = { scope.launch { gridState.animateScrollToItem(0) } },
@@ -242,7 +244,7 @@ fun ComfortableIrregularGrid(items: List<GalleryMedia>, isEnabled: Boolean, imag
 
 @OptIn(UnstableApi::class)
 @Composable
-fun GaplessMediaCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: ImageLoader, onPlayClick: () -> Unit) {
+fun ComfortableMediaCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: ImageLoader, onPlayClick: () -> Unit) {
     val context = LocalContext.current
     Card(modifier = Modifier.fillMaxWidth().wrapContentHeight(), shape = RectangleShape) {
         Box(modifier = Modifier.aspectRatio(item.ratio), contentAlignment = Alignment.Center) {
@@ -261,11 +263,11 @@ fun GaplessMediaCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: ImageL
                     IconButton(onClick = onPlayClick) { Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(32.dp)) }
                 }
             }
-            // 해상도 (좌측 하단)
+            // 좌측 하단 해상도 표시
             Surface(color = Color.Black.copy(alpha = 0.4f), modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)) {
                 Text(text = item.resolutionText, color = Color.White, fontSize = 7.sp, modifier = Modifier.padding(horizontal = 3.dp))
             }
-            // 온라인 (우측 하단)
+            // 우측 하단 온라인 전용 배지
             if (item.isOnline) {
                 Surface(color = MaterialTheme.colorScheme.primary.copy(0.8f), modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)) {
                     Text(text = "온라인", color = Color.White, fontSize = 7.sp, modifier = Modifier.padding(horizontal = 4.dp))
