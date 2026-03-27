@@ -55,12 +55,16 @@ data class GalleryMedia(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // [추가] Intent로부터 초기 설정값 읽기
+        val initialTabName = intent.getStringExtra("tab_name") ?: "전체"
+        val initialAutoScroll = intent.getBooleanExtra("auto_scroll", false)
+
         setContent {
             MaterialTheme {
                 PermissionCheck {
-                    // 알림창(Status Bar) 아래 배치
                     Surface(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-                        MainGalleryApp()
+                        MainGalleryApp(initialTabName, initialAutoScroll)
                     }
                 }
             }
@@ -82,11 +86,23 @@ fun PermissionCheck(content: @Composable () -> Unit) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun MainGalleryApp() {
+fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean) {
     val tabs = listOf("전체", "사진", "동영상", "단말", "온라인")
-    val pagerState = rememberPagerState(pageCount = { tabs.size })
+    
+    // [반영] Intent에서 받은 탭 이름에 맞는 인덱스 계산
+    val initialPageIndex = remember { 
+        val index = tabs.indexOf(initialTab)
+        if (index != -1) index else 0
+    }
+    
+    val pagerState = rememberPagerState(
+        initialPage = initialPageIndex,
+        pageCount = { tabs.size }
+    )
     val scope = rememberCoroutineScope()
-    var isAutoScrollEnabled by remember { mutableStateOf(false) }
+    
+    // [반영] Intent에서 받은 자동 스크롤 여부 설정
+    var isAutoScrollEnabled by remember { mutableStateOf(initialAutoScroll) }
 
     val totalMedia = remember {
         List(100) { i -> 
@@ -124,7 +140,6 @@ fun MainGalleryApp() {
             }
         }
     ) { padding ->
-        // [반영] 좌우 스와이프로 탭 전환 지원
         HorizontalPager(
             state = pagerState, 
             modifier = Modifier.padding(padding).fillMaxSize(),
@@ -160,7 +175,7 @@ fun PersistentAutoLoopGrid(items: List<GalleryMedia>, isEnabled: Boolean) {
         }
     }
 
-    // [반영] 화면에 '전체'가 보이는 동영상 파일 자동 재생 대상 선택
+    // 화면 전체가 보이는 동영상 자동 재생 로직
     val activeVideoId by remember {
         derivedStateOf {
             val layoutInfo = gridState.layoutInfo
@@ -170,7 +185,6 @@ fun PersistentAutoLoopGrid(items: List<GalleryMedia>, isEnabled: Boolean) {
             val viewportStart = layoutInfo.viewportStartOffset
             val viewportEnd = layoutInfo.viewportEndOffset
 
-            // 화면 안에 잘림 없이 완전히 들어온 동영상들 중 첫 번째 선택
             visibleItems.firstOrNull { info ->
                 val itemStart = info.offset.y
                 val itemEnd = info.offset.y + info.size.height
@@ -232,7 +246,6 @@ fun ComfortableMediaCard(item: GalleryMedia, isPlaying: Boolean, onPlayClick: ()
                         tint = Color.White.copy(alpha = 0.8f),
                         modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).size(20.dp)
                     )
-                    // 플레이 아이콘 클릭 시 수동 재생
                     IconButton(onClick = onPlayClick) {
                         Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(40.dp))
                     }
