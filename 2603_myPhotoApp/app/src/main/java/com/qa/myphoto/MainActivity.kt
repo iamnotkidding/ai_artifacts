@@ -1,8 +1,6 @@
 package com.qa.myphoto
 
 
-package com.example.photogallery
-
 import android.Manifest
 import android.content.ContentUris
 import android.net.Uri
