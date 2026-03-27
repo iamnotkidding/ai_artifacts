@@ -1,6 +1,6 @@
-이전에 업데이트된 '구글 포토 스타일의 부드러운 미리보기(교차 전환 페이드인, 오디오 포커스 최적화)' 기능까지 모두 하나로 통합한 최종 전체 소스 코드입니다.
-이전 코드들에 있었던 자잘한 시각적 줌(visualScale) 잔재를 완전히 걷어내어 코드가 훨씬 깔끔해졌고, 오직 레이아웃 엔진의 수학적 연산(Fluid Reflow)에 의해서만 크기가 조절되도록 최적화했습니다.
-아래 코드를 복사하여 MainActivity.kt 파일에 덮어씌워 주시면 모든 기능이 완벽하게 동작합니다! 🚀
+요청하신 대로 레이아웃의 가로/세로 절대 최소 크기를 기존 64dp에서 정확히 절반인 32dp로 축소했습니다.
+이제 화면을 축소(핀치 줌)할 때 파일들이 훨씬 더 작고 촘촘하게 배열될 수 있으며, 최소 크기에 도달했을 때 동영상 재생 버튼 등의 UI가 깔끔하게 숨겨지는 스마트 로직은 그대로 유지됩니다.
+아래 최종 코드로 전체를 덮어씌워 주세요!
 💻 MainActivity.kt 최종 통합 소스 코드
 package com.example.photogallery
 
@@ -47,6 +47,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -263,8 +264,8 @@ fun OptimalFluidGallery(
     val screenWidthDp = configuration.screenWidthDp.toFloat()
     val density = LocalDensity.current.density
 
-    // 절대 최소 크기: 64dp (플레이버튼 32dp * 2)
-    val MIN_DIMENSION_DP = 64f
+    // [요구사항 반영] 가로/세로 절대 최소 크기를 기존 64dp에서 절반인 32dp로 축소
+    val MIN_DIMENSION_DP = 32f
 
     val rows = remember(items, maxItemsPerRow, itemScales.toMap(), screenWidthDp) {
         val rowDataList = mutableListOf<RowData>()
@@ -509,7 +510,6 @@ fun DynamicRatioMediaCard(
     val context = LocalContext.current
     var isMuted by remember { mutableStateOf(true) }
 
-    // [구글 포토 효과] 페이드인 애니메이션을 위한 상태
     var isVideoReady by remember { mutableStateOf(false) }
     val videoAlpha by animateFloatAsState(
         targetValue = if (isVideoReady && isPlaying) 1f else 0f,
@@ -538,7 +538,6 @@ fun DynamicRatioMediaCard(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
-            // 썸네일(사진)을 바닥에 깔아둡니다
             AsyncImage(
                 model = ImageRequest.Builder(context).data(item.uri).memoryCachePolicy(CachePolicy.ENABLED).crossfade(200).build(),
                 imageLoader = imageLoader,
@@ -547,7 +546,6 @@ fun DynamicRatioMediaCard(
                 modifier = Modifier.fillMaxSize()
             )
             
-            // 재생 시 비디오가 부드럽게 나타납니다
             if (item.isVideo && isPlaying) {
                 Box(modifier = Modifier.fillMaxSize().alpha(videoAlpha)) {
                     VideoPlayerCore(
@@ -634,7 +632,6 @@ fun VideoPlayerCore(uri: Uri, isMuted: Boolean, onFirstFrameRendered: () -> Unit
             repeatMode = Player.REPEAT_MODE_ONE
             volume = if (isMuted) 0f else 1f
             
-            // 오디오 포커스 동적 핸들링
             val audioAttributes = androidx.media3.common.AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
                 .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
