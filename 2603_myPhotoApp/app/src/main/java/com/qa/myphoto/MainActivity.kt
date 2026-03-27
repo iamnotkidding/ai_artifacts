@@ -119,15 +119,16 @@ fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean, initialZoom: 
                     val isVideo = (cursor.getString(mimeCol) ?: "").startsWith("video")
                     val uri = ContentUris.withAppendedId(if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
                     
-                    // 가로가 길면 Wide로 분류하여 Span 확장 대상으로 지정
+                    // 가로 비율이 1.4 이상이면 와이드 파일로 분류하여 공간 점유율 높임
                     localItems.add(GalleryMedia("local_$id", uri, isVideo, false, ratio, "${w}x${h}", ratio > 1.4f))
                 }
             }
             withContext(Dispatchers.Main) { totalMedia.addAll(localItems) }
         }
+        // 온라인 파일 (와이드 비율 포함)
         launch(Dispatchers.IO) {
-            delay(1000)
-            val remoteItems = List(5) { i -> GalleryMedia("online_$i", Uri.parse("https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"), true, true, 1.77f, "1920x1080", true) }
+            delay(1200)
+            val remoteItems = List(6) { i -> GalleryMedia("online_$i", Uri.parse("https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"), true, true, 1.77f, "1920x1080", true) }
             withContext(Dispatchers.Main) { totalMedia.addAll(remoteItems) }
         }
     }
@@ -156,13 +157,13 @@ fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean, initialZoom: 
                 4 -> totalMedia.filter { it.isOnline }
                 else -> totalMedia
             }
-            ComfortableGaplessGrid(filtered, isAutoScrollEnabled, videoImageLoader, initialZoom)
+            ComfortableStaggeredGrid(filtered, isAutoScrollEnabled, videoImageLoader, initialZoom)
         }
     }
 }
 
 @Composable
-fun ComfortableGaplessGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageLoader: ImageLoader, initialColumns: Int) {
+fun ComfortableStaggeredGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageLoader: ImageLoader, initialColumns: Int) {
     val gridState = rememberLazyStaggeredGridState()
     val scope = rememberCoroutineScope()
     var columnCount by remember { mutableFloatStateOf(initialColumns.toFloat()) }
@@ -181,6 +182,7 @@ fun ComfortableGaplessGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageL
         }
     }
 
+    // 중앙 가시성 동영상 자동 재생
     val activeVideoId by remember {
         derivedStateOf {
             val layoutInfo = gridState.layoutInfo
@@ -204,22 +206,16 @@ fun ComfortableGaplessGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageL
                         columnCount = (columnCount / zoom).coerceIn(1f, 5.9f)
                     }
                 },
-            // [반영] 빈 공간 없도록 최소 간격 설정
             contentPadding = PaddingValues(1.dp),
             verticalItemSpacing = 1.dp,
             horizontalArrangement = Arrangement.spacedBy(1.dp)
         ) {
             items(items, key = { it.id }, span = { item ->
-                // [반영] 가로 크기를 다양하게 하여 빈 공간을 나머지 파일이 맞추도록 유도
-                // 와이드 비율이거나 특정 패턴(인덱스)에서 Span을 2칸 점유하게 설정
-                if (item.isWide && displayColumns > 1) {
-                    StaggeredGridItemSpan.FullLine 
-                } else {
-                    StaggeredGridItemSpan.SingleLane
-                }
+                // [핵심] 와이드 파일은 가로 2칸 점유하게 하여 빈 공간을 나머지 파일이 맞추도록 유도
+                if (item.isWide && displayColumns > 1) StaggeredGridItemSpan.FullLine else StaggeredGridItemSpan.SingleLane
             }) { item ->
                 val isPlaying = item.id == manualPlayId || (manualPlayId == null && item.id == activeVideoId)
-                ComfortableCard(item, isPlaying, imageLoader) {
+                GaplessMediaCard(item, isPlaying, imageLoader) {
                     manualPlayId = if (manualPlayId == item.id) null else item.id
                 }
             }
@@ -235,9 +231,8 @@ fun ComfortableGaplessGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageL
 
 @OptIn(UnstableApi::class)
 @Composable
-fun ComfortableCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: ImageLoader, onPlayClick: () -> Unit) {
+fun GaplessMediaCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: ImageLoader, onPlayClick: () -> Unit) {
     val context = LocalContext.current
-    // [반영] RectangleShape를 사용하여 사진들이 완전히 맞물리도록 구성
     Card(modifier = Modifier.fillMaxWidth().wrapContentHeight(), shape = RectangleShape) {
         Box(modifier = Modifier.aspectRatio(item.ratio), contentAlignment = Alignment.Center) {
             if (item.isVideo && isPlaying) {
@@ -247,7 +242,7 @@ fun ComfortableCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: ImageLo
                     model = ImageRequest.Builder(context).data(item.uri).memoryCachePolicy(CachePolicy.ENABLED).crossfade(true).build(),
                     imageLoader = imageLoader,
                     contentDescription = null,
-                    contentScale = ContentScale.Crop,
+                    contentScale = ContentScale.Crop, // 영역에 꽉 차게 조절
                     modifier = Modifier.fillMaxSize().background(Color.DarkGray)
                 )
                 if (item.isVideo) {
@@ -255,9 +250,11 @@ fun ComfortableCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: ImageLo
                     IconButton(onClick = onPlayClick) { Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(32.dp)) }
                 }
             }
+            // 해상도 표시
             Surface(color = Color.Black.copy(alpha = 0.4f), modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)) {
                 Text(text = item.resolutionText, color = Color.White, fontSize = 7.sp, modifier = Modifier.padding(horizontal = 3.dp))
             }
+            // 온라인 배지
             if (item.isOnline) {
                 Surface(color = MaterialTheme.colorScheme.primary.copy(0.8f), modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)) {
                     Text(text = "온라인", color = Color.White, fontSize = 7.sp, modifier = Modifier.padding(horizontal = 4.dp))
