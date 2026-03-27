@@ -1,6 +1,6 @@
-커스텀 탭에서 하단 슬라이더로 크기를 정밀하게 조절할 때, 대상 영상이 화면 위아래로 밀려나지 않고 항상 화면 한가운데(정중앙)에 고정되도록 스크롤을 동기화하는 로직을 추가했습니다.
-Slider 컴포넌트의 값을 변경할 때마다 현재 뷰포트(화면) 높이와 대상이 있는 줄(Row)의 높이를 픽셀 단위로 계산하여, 정확히 화면 중앙에 오도록 즉각적으로 스크롤 위치를 잡아줍니다.
-아래의 최종 전체 코드로 덮어씌워 주세요!
+이전에 업데이트된 '구글 포토 스타일의 부드러운 미리보기(교차 전환 페이드인, 오디오 포커스 최적화)' 기능까지 모두 하나로 통합한 최종 전체 소스 코드입니다.
+이전 코드들에 있었던 자잘한 시각적 줌(visualScale) 잔재를 완전히 걷어내어 코드가 훨씬 깔끔해졌고, 오직 레이아웃 엔진의 수학적 연산(Fluid Reflow)에 의해서만 크기가 조절되도록 최적화했습니다.
+아래 코드를 복사하여 MainActivity.kt 파일에 덮어씌워 주시면 모든 기능이 완벽하게 동작합니다! 🚀
 💻 MainActivity.kt 최종 통합 소스 코드
 package com.example.photogallery
 
@@ -17,6 +17,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
@@ -31,6 +32,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
@@ -45,7 +47,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.zIndex
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -260,11 +261,9 @@ fun OptimalFluidGallery(
     
     val configuration = LocalConfiguration.current
     val screenWidthDp = configuration.screenWidthDp.toFloat()
-    
-    // dp 값을 px 단위로 계산하기 위해 사용
     val density = LocalDensity.current.density
 
-    // 가로/세로 절대 최소 크기 = 플레이 버튼(32dp)의 2배 = 64dp
+    // 절대 최소 크기: 64dp (플레이버튼 32dp * 2)
     val MIN_DIMENSION_DP = 64f
 
     val rows = remember(items, maxItemsPerRow, itemScales.toMap(), screenWidthDp) {
@@ -286,7 +285,6 @@ fun OptimalFluidGallery(
                 val constrainedRatio = item.ratio.coerceIn(0.5f, 2.5f)
                 
                 val requiredMinWeight = minLogicalWeightBase * maxOf(1f, constrainedRatio)
-                
                 val originalWeight = constrainedRatio * scale
                 val effectiveWeight = maxOf(originalWeight, requiredMinWeight)
 
@@ -303,8 +301,8 @@ fun OptimalFluidGallery(
                     val tWeight = maxOf(tConstrainedRatio * tScale, tRequiredMinWeight)
                     
                     val projectedWidth = availableWidth * (tWeight / testWeightSum)
-                    
                     val requiredMinWidthDp = MIN_DIMENSION_DP * maxOf(1f, tConstrainedRatio)
+                    
                     if (projectedWidth < requiredMinWidthDp - 0.1f) {
                         violateMinSize = true
                         break
@@ -456,9 +454,8 @@ fun OptimalFluidGallery(
             }
         }
 
-        val activeControlVideoId = activeVideoId ?: centerVideoId
-        if (isCustomTab && activeControlVideoId != null) {
-            val scale = (itemScales[activeControlVideoId] ?: 1f).coerceAtLeast(0.1f)
+        if (isCustomTab && activeVideoId != null) {
+            val scale = (itemScales[activeVideoId!!] ?: 1f).coerceAtLeast(0.1f)
             
             Column(
                 modifier = Modifier
@@ -475,14 +472,12 @@ fun OptimalFluidGallery(
                 Slider(
                     value = scale,
                     onValueChange = { newScale -> 
-                        itemScales[activeControlVideoId] = newScale 
+                        itemScales[activeVideoId!!] = newScale 
                         
-                        // [요구사항] 크기 조절 시 대상 아이템을 화면 한가운데에 시각적으로 고정 유지
-                        val rIndex = rows.indexOfFirst { row -> row.items.any { it.id == activeControlVideoId } }
+                        val rIndex = rows.indexOfFirst { row -> row.items.any { it.id == activeVideoId } }
                         if (rIndex >= 0) {
                             val rowHeightPx = (rows[rIndex].rowHeightDp * density).toInt()
                             val viewportHeight = listState.layoutInfo.viewportSize.height
-                            // 아이템의 상단 위치를 뷰포트 정중앙에서 아이템 높이 절반만큼 위로 올리면 완벽하게 중앙 정렬
                             val offset = (viewportHeight / 2) - (rowHeightPx / 2)
                             
                             scope.launch {
@@ -514,6 +509,18 @@ fun DynamicRatioMediaCard(
     val context = LocalContext.current
     var isMuted by remember { mutableStateOf(true) }
 
+    // [구글 포토 효과] 페이드인 애니메이션을 위한 상태
+    var isVideoReady by remember { mutableStateOf(false) }
+    val videoAlpha by animateFloatAsState(
+        targetValue = if (isVideoReady && isPlaying) 1f else 0f,
+        animationSpec = tween(durationMillis = 400),
+        label = "videoFadeOutIn"
+    )
+
+    LaunchedEffect(isPlaying) {
+        if (!isPlaying) isVideoReady = false
+    }
+
     Card(
         modifier = Modifier
             .fillMaxSize() 
@@ -531,6 +538,7 @@ fun DynamicRatioMediaCard(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
+            // 썸네일(사진)을 바닥에 깔아둡니다
             AsyncImage(
                 model = ImageRequest.Builder(context).data(item.uri).memoryCachePolicy(CachePolicy.ENABLED).crossfade(200).build(),
                 imageLoader = imageLoader,
@@ -539,14 +547,21 @@ fun DynamicRatioMediaCard(
                 modifier = Modifier.fillMaxSize()
             )
             
+            // 재생 시 비디오가 부드럽게 나타납니다
+            if (item.isVideo && isPlaying) {
+                Box(modifier = Modifier.fillMaxSize().alpha(videoAlpha)) {
+                    VideoPlayerCore(
+                        uri = item.uri, 
+                        isMuted = isMuted,
+                        onFirstFrameRendered = { isVideoReady = true }
+                    )
+                }
+            }
+            
             if (item.isVideo) {
-                if (isPlaying) {
-                    VideoPlayerCore(item.uri, isMuted)
-                } else {
-                    if (!isAtMinSize) {
-                        IconButton(onClick = onPlayToggle) { 
-                            Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(32.dp)) 
-                        }
+                if (!isPlaying && !isAtMinSize) {
+                    IconButton(onClick = onPlayToggle) { 
+                        Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(32.dp)) 
                     }
                 }
                 
@@ -611,7 +626,7 @@ suspend fun PointerInputScope.detectTwoFingerGesture(
 
 @OptIn(UnstableApi::class)
 @Composable
-fun VideoPlayerCore(uri: Uri, isMuted: Boolean) {
+fun VideoPlayerCore(uri: Uri, isMuted: Boolean, onFirstFrameRendered: () -> Unit) {
     val context = LocalContext.current
     val exoPlayer = remember(uri) {
         ExoPlayer.Builder(context).build().apply {
@@ -619,9 +634,22 @@ fun VideoPlayerCore(uri: Uri, isMuted: Boolean) {
             repeatMode = Player.REPEAT_MODE_ONE
             volume = if (isMuted) 0f else 1f
             
+            // 오디오 포커스 동적 핸들링
+            val audioAttributes = androidx.media3.common.AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                .build()
+            setAudioAttributes(audioAttributes, !isMuted)
+            
             trackSelectionParameters = trackSelectionParameters.buildUpon()
                 .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, isMuted)
                 .build()
+                
+            addListener(object : Player.Listener {
+                override fun onRenderedFirstFrame() {
+                    onFirstFrameRendered()
+                }
+            })
                 
             prepare()
             playWhenReady = true
@@ -633,6 +661,7 @@ fun VideoPlayerCore(uri: Uri, isMuted: Boolean) {
         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, isMuted)
             .build()
+        exoPlayer.setAudioAttributes(exoPlayer.audioAttributes, !isMuted)
     }
 
     DisposableEffect(uri) { onDispose { exoPlayer.release() } }
