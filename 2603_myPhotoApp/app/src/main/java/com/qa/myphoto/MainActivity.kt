@@ -1,6 +1,8 @@
 package com.qa.myphoto
 
 
+package com.example.photogallery
+
 import android.Manifest
 import android.content.ContentUris
 import android.net.Uri
@@ -48,7 +50,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.abs
 
 data class GalleryMedia(
     val id: String,
@@ -56,16 +57,15 @@ data class GalleryMedia(
     val isVideo: Boolean,
     val isOnline: Boolean,
     val ratio: Float,
-    val resolutionText: String
+    val resolutionText: String,
+    val span: Int = 1 // 가로 점유 칸 수 (1 or 2)
 )
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 화면 꺼짐 방지
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        // [반영 2] Intent 파라미터 읽기
         val initialTabName = intent.getStringExtra("tab_name") ?: "전체"
         val initialAutoScroll = intent.getBooleanExtra("auto_scroll", false)
         val initialZoomLevel = intent.getIntExtra("zoom_level", 3).coerceIn(1, 5)
@@ -106,7 +106,6 @@ fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean, initialZoom: 
 
     val totalMedia = remember { mutableStateListOf<GalleryMedia>() }
 
-    // 데이터 로딩 (로컬 우선 -> 온라인 추가)
     LaunchedEffect(Unit) {
         launch(Dispatchers.IO) {
             val localItems = mutableListOf<GalleryMedia>()
@@ -122,14 +121,18 @@ fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean, initialZoom: 
                     val h = cursor.getInt(hCol).coerceAtLeast(1)
                     val isVideo = cursor.getString(mimeCol).startsWith("video")
                     val uri = ContentUris.withAppendedId(if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                    localItems.add(GalleryMedia("local_$id", uri, isVideo, false, w.toFloat()/h, "${w}x${h}"))
+                    // 가로가 특히 긴 경우 span을 2로 설정하여 가로 크기 다양화
+                    val span = if (w > h * 1.5 && id % 3 == 0L) 2 else 1
+                    localItems.add(GalleryMedia("local_$id", uri, isVideo, false, w.toFloat()/h, "${w}x${h}", span))
                 }
             }
             withContext(Dispatchers.Main) { totalMedia.addAll(localItems) }
         }
         launch(Dispatchers.IO) {
             delay(1000)
-            val remoteItems = List(10) { i -> GalleryMedia("online_$i", Uri.parse("https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"), true, true, 1.77f, "1920x1080") }
+            val remoteItems = List(8) { i -> 
+                GalleryMedia("online_$i", Uri.parse("https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"), true, true, 1.77f, "1920x1080", 1) 
+            }
             withContext(Dispatchers.Main) { totalMedia.addAll(remoteItems) }
         }
     }
@@ -140,17 +143,22 @@ fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean, initialZoom: 
                 ScrollableTabRow(selectedTabIndex = pagerState.currentPage, edgePadding = 16.dp) {
                     tabs.forEachIndexed { i, title ->
                         Tab(selected = pagerState.currentPage == i, onClick = { scope.launch { pagerState.animateScrollToPage(i) } }) {
-                            Text(title, fontSize = 15.sp, modifier = Modifier.padding(12.dp))
+                            Text(title, fontSize = 14.sp, modifier = Modifier.padding(12.dp))
                         }
                     }
                 }
-                Button(onClick = { isAutoScrollEnabled = !isAutoScrollEnabled }, modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+                Button(onClick = { isAutoScrollEnabled = !isAutoScrollEnabled }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
                     Text(if (isAutoScrollEnabled) "자동 스크롤 중지" else "자동 스크롤 시작")
                 }
             }
         }
     ) { padding ->
-        HorizontalPager(state = pagerState, modifier = Modifier.padding(padding).fillMaxSize()) { pageIdx ->
+        // [반영 2] 한 손가락 좌우 스와이프로 탭 이동 (HorizontalPager 기본 동작 활용)
+        HorizontalPager(
+            state = pagerState, 
+            modifier = Modifier.padding(padding).fillMaxSize(),
+            beyondViewportPageCount = 1
+        ) { pageIdx ->
             val filtered = when (pageIdx) {
                 1 -> totalMedia.filter { !it.isVideo }
                 2 -> totalMedia.filter { it.isVideo }
@@ -167,42 +175,30 @@ fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean, initialZoom: 
 fun PersistentAutoLoopGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageLoader: ImageLoader, initialZoom: Int) {
     val gridState = rememberLazyStaggeredGridState()
     val scope = rememberCoroutineScope()
-    
-    // [반영 2] 초기 줌 레벨 적용
     var columnCount by remember { mutableFloatStateOf(initialZoom.toFloat()) }
     val displayColumns = columnCount.toInt().coerceIn(1, 5)
-
     var scrollDirection by remember { mutableIntStateOf(1) }
     var manualPlayId by remember { mutableStateOf<String?>(null) }
 
-    // [반영 1] 자동 스크롤 로직 (왕복 및 수동 스크롤 병행)
     LaunchedEffect(isEnabled, scrollDirection) {
         if (isEnabled) {
             while (true) {
                 if (scrollDirection == 1 && !gridState.canScrollForward) scrollDirection = -1
                 else if (scrollDirection == -1 && !gridState.canScrollBackward) scrollDirection = 1
-                gridState.scrollBy(2.5f * scrollDirection)
+                gridState.scrollBy(2.0f * scrollDirection)
                 delay(16)
             }
         }
     }
 
-    // [반영 1] 스크롤 중 자동 재생 대상 감지 (화면에 전체가 보이는 파일 우선)
     val activeVideoId by remember {
         derivedStateOf {
             val layoutInfo = gridState.layoutInfo
             val visibleItems = layoutInfo.visibleItemsInfo
             if (visibleItems.isEmpty()) return@derivedStateOf null
-            
-            val viewportStart = layoutInfo.viewportStartOffset
-            val viewportEnd = layoutInfo.viewportEndOffset
-
             visibleItems.firstOrNull { info ->
-                val itemStart = info.offset.y
-                val itemEnd = info.offset.y + info.size.height
-                val isFullyVisible = itemStart >= viewportStart && itemEnd <= viewportEnd
                 val isVideo = items.getOrNull(info.index)?.isVideo == true
-                isFullyVisible && isVideo
+                isVideo && info.offset.y >= layoutInfo.viewportStartOffset && (info.offset.y + info.size.height) <= layoutInfo.viewportEndOffset
             }?.key.toString()
         }
     }
@@ -210,6 +206,7 @@ fun PersistentAutoLoopGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageL
     Box(modifier = Modifier.fillMaxSize()) {
         LazyVerticalStaggeredGrid(
             state = gridState,
+            // [반영 3] 세로 뿐만 아니라 가로 크기도 다양하게 반영 (StaggeredGrid의 특성 및 Span 활용)
             columns = StaggeredGridCells.Fixed(displayColumns),
             modifier = Modifier
                 .fillMaxSize()
@@ -223,7 +220,10 @@ fun PersistentAutoLoopGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageL
             verticalItemSpacing = 2.dp,
             horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            items(items, key = { it.id }) { item ->
+            items(items, key = { it.id }, span = { item -> 
+                // 특정 조건의 아이템은 가로로 2칸 차지하게 하여 가로 크기 다양화
+                StaggeredGridItemSpan.FullLine.takeIf { item.span > 1 && displayColumns > 1 } ?: StaggeredGridItemSpan.SingleLane
+            }) { item ->
                 val isPlaying = item.id == manualPlayId || (manualPlayId == null && item.id == activeVideoId)
                 ComfortableMediaCard(item, isPlaying, imageLoader) { 
                     manualPlayId = if (manualPlayId == item.id) null else item.id 
@@ -231,16 +231,16 @@ fun PersistentAutoLoopGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageL
             }
         }
 
-        // 퀵 이동 버튼 (상/하)
+        // 퀵 이동 버튼
         Column(modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             AnimatedVisibility(visible = gridState.firstVisibleItemIndex > 0) {
-                FloatingActionButton(onClick = { scope.launch { gridState.animateScrollToItem(0) } }, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Default.ArrowUpward, "Top")
+                FloatingActionButton(onClick = { scope.launch { gridState.animateScrollToItem(0) } }, modifier = Modifier.size(44.dp)) {
+                    Icon(Icons.Default.ArrowUpward, null)
                 }
             }
             AnimatedVisibility(visible = gridState.canScrollForward) {
-                FloatingActionButton(onClick = { scope.launch { gridState.animateScrollToItem(items.size - 1) } }, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Default.ArrowDownward, "Bottom")
+                FloatingActionButton(onClick = { scope.launch { gridState.animateScrollToItem(items.size - 1) } }, modifier = Modifier.size(44.dp)) {
+                    Icon(Icons.Default.ArrowDownward, null)
                 }
             }
         }
@@ -251,7 +251,7 @@ fun PersistentAutoLoopGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageL
 @Composable
 fun ComfortableMediaCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: ImageLoader, onPlayClick: () -> Unit) {
     val context = LocalContext.current
-    Card(modifier = Modifier.fillMaxWidth().wrapContentHeight(), shape = MaterialTheme.shapes.extraSmall) {
+    Card(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.extraSmall) {
         Box(modifier = Modifier.aspectRatio(item.ratio), contentAlignment = Alignment.Center) {
             if (item.isVideo && isPlaying) {
                 VideoPlayerCore(item.uri)
@@ -264,17 +264,25 @@ fun ComfortableMediaCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: Im
                     modifier = Modifier.fillMaxSize().background(Color.DarkGray)
                 )
                 if (item.isVideo) {
-                    Icon(Icons.Default.VideoCameraBack, null, tint = Color.White.copy(0.8f), modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).size(20.dp))
-                    IconButton(onClick = onPlayClick) { Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(40.dp)) }
+                    Icon(Icons.Default.VideoCameraBack, null, tint = Color.White.copy(0.7f), modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(18.dp))
+                    IconButton(onClick = onPlayClick) { Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(36.dp)) }
                 }
             }
-            // 해상도 표시 (좌측 하단)
-            Surface(color = Color.Black.copy(alpha = 0.5f), shape = MaterialTheme.shapes.extraSmall, modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)) {
-                Text(text = item.resolutionText, color = Color.White, fontSize = 8.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+
+            // 좌측 하단 해상도
+            Surface(color = Color.Black.copy(0.5f), shape = MaterialTheme.shapes.extraSmall, modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)) {
+                Text(text = item.resolutionText, color = Color.White, fontSize = 7.sp, modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp))
             }
-            // 단말/온라인 구분 (우측 하단)
-            Surface(color = Color.White.copy(alpha = 0.2f), modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)) {
-                Text(text = if(item.isOnline) "Cloud" else "Local", color = Color.White, fontSize = 8.sp, modifier = Modifier.padding(2.dp))
+
+            // [반반영 1] 온라인 파일만 표시 (로컬 표시 제거)
+            if (item.isOnline) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primary.copy(0.8f),
+                    shape = MaterialTheme.shapes.extraSmall,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
+                ) {
+                    Text(text = "온라인", color = Color.White, fontSize = 7.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                }
             }
         }
     }
