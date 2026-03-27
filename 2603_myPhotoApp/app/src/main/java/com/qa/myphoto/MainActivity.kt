@@ -1,11 +1,6 @@
-요청하신 5가지 요구사항을 완벽하게 반영하여 가장 진보된 형태의 '유체형 테트리스(Fluid Justified Flow)' 레이아웃으로 엔진을 완전히 재설계했습니다.
-기존에 줌이 작동하지 않던 원인은 시각적 크기(graphicsLayer)와 물리적 크기가 충돌했기 때문입니다. 이번 버전에서는 시각적 눈속임을 모두 제거하고, 제스처를 할 때마다 레이아웃 엔진이 1초에 60번씩 수학적 가중치를 재계산하여 물리적 크기를 실시간으로 당기고 밀어내는(Reflow) 진짜 구글 포토 방식으로 구현했습니다.
-💡 주요 핵심 적용 기술
- * 1/5 절대 최소 크기 공식 도입: 화면의 가로/세로 중 더 긴 쪽의 20%(1/5)를 어떤 상황에서도 작아질 수 없는 절대 최소 한계선으로 적용했습니다.
- * 동적 줄바꿈 및 공간 100% 채움 (유기적 재배치): 파일을 축소하면 여유 공간이 생기므로 다음 줄의 파일들을 자동으로 끌어올립니다. 반대로 확대하면 옆 파일들을 최소 크기(1/5)까지 쥐어짜며 버티다가, 더 이상 줄어들 수 없게 되면 다음 줄로 부드럽게 밀어냅니다.
- * 완벽한 세로 빈 공간 동기화: 같은 줄에 있는 파일들은 모두 가장 확대된(가장 큰) 파일의 세로 높이에 맞춰 자동으로 꽉 채워집니다(Crop). 이로 인해 파일 아래에 검은 빈 공간이 단 1픽셀도 남지 않습니다.
- * 최소 크기 도달 시 UI 자동 숨김: 제스처로 크기를 줄여 최소 한계선에 도달하면 재생 아이콘, 음소거, 해상도 텍스트가 방해되지 않도록 즉시 사라집니다.
-기존 코드를 모두 지우고 아래의 완벽한 최종 코드로 덮어씌워 주세요!
+커스텀 탭에서 하단 슬라이더로 크기를 정밀하게 조절할 때, 대상 영상이 화면 위아래로 밀려나지 않고 항상 화면 한가운데(정중앙)에 고정되도록 스크롤을 동기화하는 로직을 추가했습니다.
+Slider 컴포넌트의 값을 변경할 때마다 현재 뷰포트(화면) 높이와 대상이 있는 줄(Row)의 높이를 픽셀 단위로 계산하여, 정확히 화면 중앙에 오도록 즉각적으로 스크롤 위치를 잡아줍니다.
+아래의 최종 전체 코드로 덮어씌워 주세요!
 💻 MainActivity.kt 최종 통합 소스 코드
 package com.example.photogallery
 
@@ -45,10 +40,12 @@ import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -73,7 +70,6 @@ data class GalleryMedia(
     val isWide: Boolean
 )
 
-// 레이아웃의 줄(Row) 정보를 담는 데이터 클래스
 data class RowData(
     val items: List<GalleryMedia>,
     val rowHeightDp: Float,
@@ -149,11 +145,10 @@ fun MainGalleryApp() {
     val pagerState = rememberPagerState(pageCount = { tabs.size })
     val scope = rememberCoroutineScope()
     
-    var columnCount by remember { mutableIntStateOf(3) }
+    var maxItemsPerRow by remember { mutableIntStateOf(3) }
     var isAutoScrollEnabled by remember { mutableStateOf(false) }
     val totalMedia = remember { mutableStateListOf<GalleryMedia>() }
     
-    // 확대/축소 스케일 전역 상태 (여기를 직접 수정하면 레이아웃이 실시간 반응함)
     val itemScales = remember { mutableStateMapOf<String, Float>() }
 
     LaunchedEffect(Unit) {
@@ -209,9 +204,9 @@ fun MainGalleryApp() {
                     
                     Spacer(modifier = Modifier.width(8.dp))
                     
-                    IconButton(onClick = { if (columnCount < 10) columnCount++ }) { Icon(Icons.Default.Remove, "작게") }
-                    Text("${columnCount}단 뷰", fontSize = 16.sp, modifier = Modifier.padding(horizontal = 8.dp))
-                    IconButton(onClick = { if (columnCount > 1) columnCount-- }) { Icon(Icons.Default.Add, "크게") }
+                    IconButton(onClick = { if (maxItemsPerRow < 10) maxItemsPerRow++ }) { Icon(Icons.Default.Remove, "작게") }
+                    Text("최대 ${maxItemsPerRow}개 배치", fontSize = 16.sp, modifier = Modifier.padding(horizontal = 8.dp))
+                    IconButton(onClick = { if (maxItemsPerRow > 1) maxItemsPerRow-- }) { Icon(Icons.Default.Add, "크게") }
                     
                     Spacer(modifier = Modifier.weight(1f))
                     
@@ -231,13 +226,13 @@ fun MainGalleryApp() {
                     1 -> totalMedia.filter { !it.isVideo }
                     2 -> totalMedia.filter { it.isVideo }
                     3 -> totalMedia.filter { it.isVideo }
-                    else -> totalMedia
+                    else -> totalMedia.toList() 
                 }
             }
             
             OptimalFluidGallery(
                 items = filtered,
-                displayColumns = columnCount,
+                maxItemsPerRow = maxItemsPerRow,
                 itemScales = itemScales, 
                 isAutoScroll = isAutoScrollEnabled,
                 onManualInteraction = { isAutoScrollEnabled = false },
@@ -251,7 +246,7 @@ fun MainGalleryApp() {
 @Composable
 fun OptimalFluidGallery(
     items: List<GalleryMedia>, 
-    displayColumns: Int, 
+    maxItemsPerRow: Int, 
     itemScales: MutableMap<String, Float>, 
     isAutoScroll: Boolean, 
     onManualInteraction: () -> Unit, 
@@ -265,18 +260,19 @@ fun OptimalFluidGallery(
     
     val configuration = LocalConfiguration.current
     val screenWidthDp = configuration.screenWidthDp.toFloat()
-    val screenHeightDp = configuration.screenHeightDp.toFloat()
+    
+    // dp 값을 px 단위로 계산하기 위해 사용
+    val density = LocalDensity.current.density
 
-    // [요구사항 1] 절대 최소 크기: 화면 전체 가로/세로 중 큰 값의 1/5 (20%)
-    val minWidthDp = maxOf(screenWidthDp, screenHeightDp) / 5f
+    // 가로/세로 절대 최소 크기 = 플레이 버튼(32dp)의 2배 = 64dp
+    val MIN_DIMENSION_DP = 64f
 
-    // [핵심 엔진] 100% 실시간 유체(Fluid) 재배치 및 테트리스 갭리스 알고리즘
-    val rows = remember(items, displayColumns, itemScales.toMap(), screenWidthDp) {
+    val rows = remember(items, maxItemsPerRow, itemScales.toMap(), screenWidthDp) {
         val rowDataList = mutableListOf<RowData>()
         if (items.isEmpty()) return@remember rowDataList
 
-        // 목표 가중치 합 (단수에 비례하여 한 줄의 적정 수용량 결정)
-        val targetWeightSum = displayColumns.toFloat()
+        val targetWeightSum = maxItemsPerRow.toFloat()
+        val minLogicalWeightBase = (MIN_DIMENSION_DP / screenWidthDp) * targetWeightSum
 
         var i = 0
         while (i < items.size) {
@@ -286,74 +282,72 @@ fun OptimalFluidGallery(
             var j = i
             while (j < items.size) {
                 val item = items[j]
-                val scale = itemScales[item.id] ?: 1f
-                // 파일의 해상도 비율 * 사용자의 줌 배율 = 현재 유효 가중치
-                val effectiveWeight = (item.ratio.coerceIn(0.5f, 2.5f) * scale).coerceAtLeast(0.1f)
+                val scale = (itemScales[item.id] ?: 1f).coerceAtLeast(0.1f)
+                val constrainedRatio = item.ratio.coerceIn(0.5f, 2.5f)
+                
+                val requiredMinWeight = minLogicalWeightBase * maxOf(1f, constrainedRatio)
+                
+                val originalWeight = constrainedRatio * scale
+                val effectiveWeight = maxOf(originalWeight, requiredMinWeight)
 
-                // 일단 줄에 추가해보고 테스트
                 val testRow = currentRowItems + item
                 val testWeightSum = currentRowWeightSum + effectiveWeight
-                
-                // 간격(2dp)을 제외하고 파일들이 나눠가질 수 있는 실제 가로 공간
                 val gapCount = testRow.size - 1
                 val availableWidth = screenWidthDp - (gapCount * 2f)
 
                 var violateMinSize = false
-                // 테스트: 이 줄에 있는 파일들 중 하나라도 최소 크기(minWidthDp) 이하로 찌그러지는가?
                 for (testItem in testRow) {
-                    val tScale = itemScales[testItem.id] ?: 1f
-                    val tWeight = (testItem.ratio.coerceIn(0.5f, 2.5f) * tScale).coerceAtLeast(0.1f)
+                    val tScale = (itemScales[testItem.id] ?: 1f).coerceAtLeast(0.1f)
+                    val tConstrainedRatio = testItem.ratio.coerceIn(0.5f, 2.5f)
+                    val tRequiredMinWeight = minLogicalWeightBase * maxOf(1f, tConstrainedRatio)
+                    val tWeight = maxOf(tConstrainedRatio * tScale, tRequiredMinWeight)
+                    
                     val projectedWidth = availableWidth * (tWeight / testWeightSum)
                     
-                    if (projectedWidth < minWidthDp) {
+                    val requiredMinWidthDp = MIN_DIMENSION_DP * maxOf(1f, tConstrainedRatio)
+                    if (projectedWidth < requiredMinWidthDp - 0.1f) {
                         violateMinSize = true
                         break
                     }
                 }
 
-                // 줄바꿈 허용 유연성 (1.5배 이상 넘어가면 무조건 줄바꿈)
                 val overTarget = testWeightSum > targetWeightSum * 1.5f
 
                 if (currentRowItems.isEmpty()) {
-                    // 줄이 비어있으면 크기 무관 일단 무조건 1개는 넣음
                     currentRowItems.add(item)
                     currentRowWeightSum += effectiveWeight
                     j++
                 } else if (violateMinSize || overTarget) {
-                    // [요구사항 1, 3] 최소 크기 한계에 도달하거나 너무 비대해지면 다음 줄로 이동(밀어냄)
                     break
                 } else {
-                    // [요구사항 2, 3] 공간이 충분하다면 줄에 추가 (다음 줄에서 당겨옴)
                     currentRowItems.add(item)
                     currentRowWeightSum += effectiveWeight
                     j++
                 }
             }
 
-            // 확정된 줄(Row)의 물리적 가로/세로 픽셀 연산
             val gapCount = currentRowItems.size - 1
             val availableWidth = screenWidthDp - (gapCount * 2f)
             
             val itemWidths = mutableMapOf<String, Float>()
             var maxRowHeightDp = 0f
 
-            // 마지막 줄이 너무 거대하게 팽창하여 늘어나는 것을 방지
             val isLastRow = j == items.size
             val effectiveTotalWeight = if (isLastRow && currentRowWeightSum < targetWeightSum * 0.8f) {
-                targetWeightSum // 마지막 줄은 빈 공간을 남겨둠
+                targetWeightSum 
             } else {
                 currentRowWeightSum
             }
 
             for (item in currentRowItems) {
-                val scale = itemScales[item.id] ?: 1f
-                val weight = (item.ratio.coerceIn(0.5f, 2.5f) * scale).coerceAtLeast(0.1f)
+                val scale = (itemScales[item.id] ?: 1f).coerceAtLeast(0.1f)
+                val constrainedRatio = item.ratio.coerceIn(0.5f, 2.5f)
+                val requiredMinWeight = minLogicalWeightBase * maxOf(1f, constrainedRatio)
+                val weight = maxOf(constrainedRatio * scale, requiredMinWeight)
                 
-                // 가중치 비율에 따라 가로 너비 분배
                 val widthDp = availableWidth * (weight / effectiveTotalWeight)
                 itemWidths[item.id] = widthDp
 
-                // 원본 해상도 비율을 지키기 위한 최적의 세로 높이 계산
                 val heightDp = widthDp / item.ratio
                 if (heightDp > maxRowHeightDp) {
                     maxRowHeightDp = heightDp
@@ -408,7 +402,6 @@ fun OptimalFluidGallery(
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.White)) {
-        // [요구사항 4] 완벽하게 물리적 크기를 통제하는 LazyColumn 활용
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
@@ -417,7 +410,6 @@ fun OptimalFluidGallery(
         ) {
             itemsIndexed(rows) { _, rowData ->
                 Row(
-                    // [요구사항 5] 줄 내부의 모든 카드의 높이를 1픽셀 오차 없이 가장 긴 높이로 통일(Crop)시켜 빈틈 방어
                     modifier = Modifier.fillMaxWidth().height(rowData.rowHeightDp.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
@@ -425,8 +417,9 @@ fun OptimalFluidGallery(
                         val isPlaying = item.id == activeVideoId || (activeVideoId == null && item.id == centerVideoId)
                         val computedWidthDp = rowData.itemWidthsDp[item.id] ?: 100f
                         
-                        // [요구사항 3] 폭이 최소치 허용오차 내로 좁혀지면 오버레이 아이콘 숨김
-                        val isAtMinSize = computedWidthDp <= minWidthDp + 5f
+                        val constrainedRatio = item.ratio.coerceIn(0.5f, 2.5f)
+                        val requiredMinWidthDp = MIN_DIMENSION_DP * maxOf(1f, constrainedRatio)
+                        val isAtMinSize = computedWidthDp <= requiredMinWidthDp + 2f 
 
                         Box(modifier = Modifier.width(computedWidthDp.dp).fillMaxHeight()) {
                             DynamicRatioMediaCard(
@@ -434,7 +427,6 @@ fun OptimalFluidGallery(
                                 isPlaying = isPlaying,
                                 isAtMinSize = isAtMinSize,
                                 onScaleChange = { zoomDelta ->
-                                    // 제스처의 미세한 변화를 전역 Map에 실시간 반영 -> 수학 공식 재연산 트리거!
                                     val currentScale = itemScales[item.id] ?: 1f
                                     val newScale = (currentScale * zoomDelta).coerceIn(0.1f, 10f)
                                     itemScales[item.id] = newScale
@@ -466,7 +458,8 @@ fun OptimalFluidGallery(
 
         val activeControlVideoId = activeVideoId ?: centerVideoId
         if (isCustomTab && activeControlVideoId != null) {
-            val scale = itemScales[activeControlVideoId] ?: 1f
+            val scale = (itemScales[activeControlVideoId] ?: 1f).coerceAtLeast(0.1f)
+            
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -475,13 +468,28 @@ fun OptimalFluidGallery(
                     .padding(horizontal = 24.dp, vertical = 16.dp)
             ) {
                 Text(
-                    text = "동영상 정밀 크기 조절: ${String.format("%.1f", scale)}x", 
+                    text = "선택된 동영상 크기 조절: ${String.format("%.1f", scale)}x", 
                     color = Color.White, 
                     fontSize = 14.sp
                 )
                 Slider(
                     value = scale,
-                    onValueChange = { itemScales[activeControlVideoId] = it },
+                    onValueChange = { newScale -> 
+                        itemScales[activeControlVideoId] = newScale 
+                        
+                        // [요구사항] 크기 조절 시 대상 아이템을 화면 한가운데에 시각적으로 고정 유지
+                        val rIndex = rows.indexOfFirst { row -> row.items.any { it.id == activeControlVideoId } }
+                        if (rIndex >= 0) {
+                            val rowHeightPx = (rows[rIndex].rowHeightDp * density).toInt()
+                            val viewportHeight = listState.layoutInfo.viewportSize.height
+                            // 아이템의 상단 위치를 뷰포트 정중앙에서 아이템 높이 절반만큼 위로 올리면 완벽하게 중앙 정렬
+                            val offset = (viewportHeight / 2) - (rowHeightPx / 2)
+                            
+                            scope.launch {
+                                listState.scrollToItem(rIndex, offset)
+                            }
+                        }
+                    },
                     valueRange = 0.1f..4f, 
                     colors = SliderDefaults.colors(
                         thumbColor = MaterialTheme.colorScheme.primary,
@@ -512,7 +520,6 @@ fun DynamicRatioMediaCard(
             .pointerInput(Unit) {
                 detectTwoFingerGesture(
                     onGesture = { zoom ->
-                        // 줌 이벤트가 발생할 때마다 델타(zoom)값을 부모 엔진에 전달하여 즉각적인 레이아웃 Reflow 발생
                         onScaleChange(zoom)
                     }
                 )
@@ -528,7 +535,7 @@ fun DynamicRatioMediaCard(
                 model = ImageRequest.Builder(context).data(item.uri).memoryCachePolicy(CachePolicy.ENABLED).crossfade(200).build(),
                 imageLoader = imageLoader,
                 contentDescription = null,
-                contentScale = ContentScale.Crop, // 100% 빈 공간 없이 영역을 꽉 채웁니다
+                contentScale = ContentScale.Crop, 
                 modifier = Modifier.fillMaxSize()
             )
             
@@ -580,7 +587,6 @@ fun DynamicRatioMediaCard(
     }
 }
 
-// 부드러운 줌 델타값 추출 및 스크롤 충돌 방지 제스처
 suspend fun PointerInputScope.detectTwoFingerGesture(
     onGesture: (zoom: Float) -> Unit
 ) {
