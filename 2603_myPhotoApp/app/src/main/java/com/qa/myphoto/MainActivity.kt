@@ -1,7 +1,6 @@
 package com.qa.myphoto
 
 
-
 import android.Manifest
 import android.content.ContentUris
 import android.net.Uri
@@ -193,13 +192,13 @@ fun MainGalleryApp() {
                     
                     Spacer(modifier = Modifier.width(8.dp))
                     
-                    IconButton(onClick = { if (columnCount < 5) columnCount++ }) { Icon(Icons.Default.Remove, "작게") }
+                    // [요구사항 1] 레이아웃 레벨을 최대 10단 뷰까지 추가
+                    IconButton(onClick = { if (columnCount < 10) columnCount++ }) { Icon(Icons.Default.Remove, "작게") }
                     Text("${columnCount}단 뷰", fontSize = 16.sp, modifier = Modifier.padding(horizontal = 8.dp))
                     IconButton(onClick = { if (columnCount > 1) columnCount-- }) { Icon(Icons.Default.Add, "크게") }
                     
                     Spacer(modifier = Modifier.weight(1f))
                     
-                    // [요구사항 2] 버튼 텍스트 변경
                     Button(onClick = { isAutoScrollEnabled = !isAutoScrollEnabled }) {
                         Text(if (isAutoScrollEnabled) "정지" else "자동")
                     }
@@ -248,9 +247,12 @@ fun OptimalReflowGrid(
     var scrollDirection by remember { mutableIntStateOf(1) }
     var activeVideoId by remember { mutableStateOf<String?>(null) }
     
-    val totalGridCells = 120 
+    // [핵심] 1부터 10까지 어떤 단수라도 완벽하게 나누어 떨어지는 최소공배수(LCM) 적용
+    val totalGridCells = 2520 
 
-    // [요구사항 2, 3] 완벽한 테트리스 비율 재계산 로직
+    // 모든 레이아웃 레벨에서 '10단 뷰일 때의 1칸 크기'를 최소 하한선으로 지정 (요구사항 2)
+    val minAllowedScale = displayColumns / 10f
+
     val (itemSpans, rowMaxScales) = remember(items, displayColumns, itemScales.toMap()) {
         if (items.isEmpty()) return@remember Pair(IntArray(0), FloatArray(0))
         
@@ -258,58 +260,48 @@ fun OptimalReflowGrid(
         val maxScales = FloatArray(items.size)
         
         val baseSpanSize = totalGridCells / displayColumns
-        // 축소/확대 시 다른 파일들이 줄어들 수 있는 최소 스팬(칸수) 제한 
-        val MIN_SPAN = totalGridCells / 5 // 약 20% 최소폭 유지
+        
+        // 어떤 레이아웃 레벨에 있든, 물리적인 최소 가로 픽셀은 10단뷰(1칸) 크기와 동일하게 보장
+        val MIN_SPAN = totalGridCells / 10 
         
         var i = 0
         while (i < items.size) {
             val rowIndices = mutableListOf<Int>()
             var j = i
             
-            // 한 줄(Row) 구성 시도
             while (j < items.size) {
                 rowIndices.add(j)
                 
                 val desired = rowIndices.map { k ->
-                    val scale = itemScales[items[k].id] ?: 1f
+                    // 스케일 값이 아무리 작아도 10단뷰 최소 크기 이하로는 내려가지 않도록 제어
+                    val scale = (itemScales[items[k].id] ?: 1f).coerceAtLeast(minAllowedScale)
                     val base = if (items[k].isWide && displayColumns > 1 && scale == 1f) (baseSpanSize * 1.5).toInt() else baseSpanSize
                     base * scale
                 }
                 val sumDesired = desired.sum()
                 
                 if (rowIndices.size == 1) {
-                    if (sumDesired >= totalGridCells) {
-                        j++
-                        break
-                    }
-                    j++
-                    continue
+                    if (sumDesired >= totalGridCells) { j++; break }
+                    j++; continue
                 }
                 
-                // 정규화 후 최소 가로 크기 위반 여부 확인
                 var isValid = true
                 for (idx in rowIndices.indices) {
-                    val k = rowIndices[idx]
-                    val scale = itemScales[items[k].id] ?: 1f
                     val allocated = (totalGridCells * desired[idx] / sumDesired).toInt()
-                    
-                    // 최소 보장폭 설정
-                    val requiredMin = (MIN_SPAN * minOf(1f, scale)).toInt().coerceAtLeast(10)
-                    if (allocated < requiredMin) {
+                    // 정규화 분배 후 최소 칸 수(10단뷰 크기)를 지킬 수 없다면 줄바꿈 발생
+                    if (allocated < MIN_SPAN) {
                         isValid = false
                         break
                     }
                 }
                 
                 val sumBase = rowIndices.sumOf { k -> 
-                    val scale = itemScales[items[k].id] ?: 1f
+                    val scale = (itemScales[items[k].id] ?: 1f).coerceAtLeast(minAllowedScale)
                     if (items[k].isWide && displayColumns > 1 && scale == 1f) (baseSpanSize * 1.5).toInt() else baseSpanSize
                 }
 
-                // 기기 기본 용량을 넘어섰거나(가로 꽉참) 억지로 축소시켜서 남은 공간이 생겼을 때의 줄바꿈 제어
                 if (sumBase >= totalGridCells && sumDesired >= totalGridCells) {
-                    if (isValid) { j++; break } 
-                    else { rowIndices.removeLast(); break }
+                    if (isValid) { j++; break } else { rowIndices.removeLast(); break }
                 }
 
                 if (!isValid) {
@@ -319,26 +311,25 @@ fun OptimalReflowGrid(
                 j++
             }
             
-            // 줄 내 아이템 스팬 확정 및 120칸에 100% 꽉 채워지도록 강제 분배
             val finalDesired = rowIndices.map { k ->
-                val scale = itemScales[items[k].id] ?: 1f
+                val scale = (itemScales[items[k].id] ?: 1f).coerceAtLeast(minAllowedScale)
                 val base = if (items[k].isWide && displayColumns > 1 && scale == 1f) (baseSpanSize * 1.5).toInt() else baseSpanSize
                 base * scale
             }
             val sumFinal = finalDesired.sum()
             var allocatedSum = 0
-            val maxScaleInRow = rowIndices.maxOfOrNull { itemScales[items[it].id] ?: 1f } ?: 1f
+            val maxScaleInRow = rowIndices.maxOfOrNull { (itemScales[items[it].id] ?: 1f).coerceAtLeast(minAllowedScale) } ?: 1f
             
             for (idx in rowIndices.indices) {
                 val k = rowIndices[idx]
                 val allocated = if (idx == rowIndices.lastIndex) {
-                    totalGridCells - allocatedSum // 마지막 파일은 남은 칸 전체 흡수
+                    totalGridCells - allocatedSum 
                 } else {
                     (totalGridCells * finalDesired[idx] / sumFinal).toInt()
                 }
                 spans[k] = allocated
                 allocatedSum += allocated
-                maxScales[k] = maxScaleInRow // [요구사항 3] 해당 파일 아래 빈공간 채움
+                maxScales[k] = maxScaleInRow 
             }
             i += rowIndices.size
         }
@@ -379,7 +370,6 @@ fun OptimalReflowGrid(
         }
     }
 
-    // [요구사항 1] 파일 경계색을 흰색(Color.White)으로 변경
     Box(modifier = Modifier.fillMaxSize().background(Color.White)) {
         LazyVerticalGrid(
             state = gridState,
@@ -399,7 +389,7 @@ fun OptimalReflowGrid(
             ) { index, item ->
                 val isPlaying = item.id == activeVideoId || (activeVideoId == null && item.id == centerVideoId)
                 
-                val itemScale = itemScales[item.id] ?: 1f
+                val itemScale = (itemScales[item.id] ?: 1f).coerceAtLeast(minAllowedScale)
                 val rowMaxScale = if (index < rowMaxScales.size) rowMaxScales[index] else itemScale
                 
                 val baseRowHeight = (360 / displayColumns).dp
@@ -411,6 +401,7 @@ fun OptimalReflowGrid(
                         isPlaying = isPlaying,
                         layoutScale = rowMaxScale, 
                         itemScale = itemScale,     
+                        minAllowedScale = minAllowedScale, // 최소 스케일 값 주입
                         onScaleChange = { newScale -> itemScales[item.id] = newScale },
                         imageLoader = imageLoader,
                         onPlayToggle = { activeVideoId = if (activeVideoId == item.id) null else item.id }
@@ -435,10 +426,9 @@ fun OptimalReflowGrid(
             }
         }
 
-        // [요구사항 4] 커스텀 탭에서 재생(자동 포함)되는 영상이 있으면 정밀 조절 바 항상 노출
         val activeControlVideoId = activeVideoId ?: centerVideoId
         if (isCustomTab && activeControlVideoId != null) {
-            val scale = itemScales[activeControlVideoId] ?: 1f
+            val scale = (itemScales[activeControlVideoId] ?: 1f).coerceAtLeast(minAllowedScale)
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -454,7 +444,7 @@ fun OptimalReflowGrid(
                 Slider(
                     value = scale,
                     onValueChange = { itemScales[activeControlVideoId] = it },
-                    valueRange = 0.5f..4f,
+                    valueRange = minAllowedScale..4f, // 슬라이더 조작 범위도 동적 하한선 적용
                     colors = SliderDefaults.colors(
                         thumbColor = MaterialTheme.colorScheme.primary,
                         activeTrackColor = MaterialTheme.colorScheme.primary
@@ -472,6 +462,7 @@ fun DynamicRatioMediaCard(
     isPlaying: Boolean, 
     layoutScale: Float,
     itemScale: Float,
+    minAllowedScale: Float,
     onScaleChange: (Float) -> Unit, 
     imageLoader: ImageLoader, 
     onPlayToggle: () -> Unit
@@ -490,6 +481,10 @@ fun DynamicRatioMediaCard(
         }
     }
 
+    // [요구사항 3] 해당 파일이 전체 화면 기준 10단 뷰 크기(최소 크기)인지 실시간 판별
+    // 사용자가 제스처 중이거나 레이아웃 상 최소 크기에 도달했을 경우를 모두 커버합니다 (여유 마진 0.05f)
+    val isAtMinSize = itemScale <= (minAllowedScale + 0.05f) || visualScale <= (minAllowedScale + 0.05f)
+
     Card(
         modifier = Modifier
             .fillMaxSize() 
@@ -500,7 +495,7 @@ fun DynamicRatioMediaCard(
                         isZooming = true
                     },
                     onGesture = { pan, zoom ->
-                        visualScale = (visualScale * zoom).coerceIn(0.5f, 4f)
+                        visualScale = (visualScale * zoom).coerceIn(minAllowedScale, 4f)
                         if (visualScale > 1f) offset += pan else offset = Offset.Zero
                     },
                     onGestureEnd = {
@@ -511,7 +506,7 @@ fun DynamicRatioMediaCard(
                 )
             },
         shape = RectangleShape,
-        colors = CardDefaults.cardColors(containerColor = Color.White) // 경계색 일치화
+        colors = CardDefaults.cardColors(containerColor = Color.White) 
     ) {
         val renderScale = visualScale / layoutScale
 
@@ -538,39 +533,48 @@ fun DynamicRatioMediaCard(
                 if (isPlaying) {
                     VideoPlayerCore(item.uri, isMuted)
                 } else {
-                    IconButton(onClick = onPlayToggle) { 
-                        Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(32.dp)) 
+                    // 최소 크기가 아닐 때만 재생 버튼 노출
+                    if (!isAtMinSize) {
+                        IconButton(onClick = onPlayToggle) { 
+                            Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(32.dp)) 
+                        }
                     }
                 }
                 
-                IconButton(
-                    onClick = { isMuted = !isMuted },
-                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(28.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp, 
-                        contentDescription = if (isMuted) "음소거 해제" else "음소거", 
-                        tint = Color.White.copy(0.9f), 
-                        modifier = Modifier.size(18.dp) 
-                    )
+                // 최소 크기가 아닐 때만 음소거 버튼 노출
+                if (!isAtMinSize) {
+                    IconButton(
+                        onClick = { isMuted = !isMuted },
+                        modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp, 
+                            contentDescription = if (isMuted) "음소거 해제" else "음소거", 
+                            tint = Color.White.copy(0.9f), 
+                            modifier = Modifier.size(18.dp) 
+                        )
+                    }
                 }
             }
             
-            Box(
-                modifier = Modifier.align(Alignment.BottomStart).padding(6.dp)
-            ) {
-                Text(
-                    text = item.resolutionText, 
-                    color = Color.White, 
-                    fontSize = 10.sp, 
-                    style = TextStyle(
-                        shadow = androidx.compose.ui.graphics.Shadow(
-                            color = Color.Black.copy(alpha = 0.8f),
-                            offset = Offset(1f, 1f),
-                            blurRadius = 4f
+            // 최소 크기가 아닐 때만 해상도 텍스트 노출
+            if (!isAtMinSize) {
+                Box(
+                    modifier = Modifier.align(Alignment.BottomStart).padding(6.dp)
+                ) {
+                    Text(
+                        text = item.resolutionText, 
+                        color = Color.White, 
+                        fontSize = 10.sp, 
+                        style = TextStyle(
+                            shadow = androidx.compose.ui.graphics.Shadow(
+                                color = Color.Black.copy(alpha = 0.8f),
+                                offset = Offset(1f, 1f),
+                                blurRadius = 4f
+                            )
                         )
                     )
-                )
+                }
             }
         }
     }
