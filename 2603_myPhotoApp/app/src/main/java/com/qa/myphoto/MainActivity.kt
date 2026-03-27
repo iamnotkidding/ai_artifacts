@@ -1,7 +1,6 @@
 package com.qa.myphoto
 
 
-
 import android.Manifest
 import android.content.ContentUris
 import android.net.Uri
@@ -212,7 +211,7 @@ fun MainGalleryApp() {
                 when (pageIdx) {
                     1 -> totalMedia.filter { !it.isVideo }
                     2 -> totalMedia.filter { it.isVideo }
-                    3 -> totalMedia.filter { it.isVideo } // 커스텀 탭(임시로 비디오만 노출, 추후 선택 로직 확장 가능)
+                    3 -> totalMedia.filter { it.isVideo }
                     else -> totalMedia
                 }
             }
@@ -245,7 +244,6 @@ fun OptimalReflowGrid(
     var scrollDirection by remember { mutableIntStateOf(1) }
     var activeVideoId by remember { mutableStateOf<String?>(null) }
     
-    // 120칸 공배수 분할 (비율 정밀 계산용)
     val totalGridCells = 120 
 
     val itemSpans = remember(items, displayColumns, itemScales.toMap()) {
@@ -266,7 +264,6 @@ fun OptimalReflowGrid(
 
             val remainingInLine = totalGridCells - currentLineSpan
 
-            // 현재 아이템이 남은 공간보다 크다면, 남은 빈 공간을 이전 파일에 더해 강제로 여백을 없앱니다.
             if (currentLineSpan > 0 && preferredSpan > remainingInLine) {
                 spans[i - 1] += remainingInLine
                 currentLineSpan = 0
@@ -276,7 +273,6 @@ fun OptimalReflowGrid(
             currentLineSpan += preferredSpan
         }
         
-        // 리스트의 가장 마지막 요소가 남긴 빈 공간도 강제로 끝까지 채움
         if (currentLineSpan in 1 until totalGridCells) {
             spans[items.lastIndex] += (totalGridCells - currentLineSpan)
         }
@@ -322,7 +318,6 @@ fun OptimalReflowGrid(
             state = gridState,
             columns = GridCells.Fixed(totalGridCells),
             modifier = Modifier.fillMaxSize(),
-            // 사진과 영상 파일 사이 2.dp 간격(여백) 추가 적용
             contentPadding = PaddingValues(2.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
             horizontalArrangement = Arrangement.spacedBy(2.dp)
@@ -338,7 +333,6 @@ fun OptimalReflowGrid(
                 val isPlaying = item.id == activeVideoId || (activeVideoId == null && item.id == centerVideoId)
                 val currentScale = itemScales[item.id] ?: 1f
                 
-                // 확대/축소 시 세로 높이도 배율에 맞게 정확히 할당
                 val baseRowHeight = (360 / displayColumns).dp
                 val itemHeight = baseRowHeight * currentScale
                 
@@ -417,8 +411,6 @@ fun DynamicRatioMediaCard(
     var isZooming by remember { mutableStateOf(false) }
     var visualScale by remember { mutableFloatStateOf(layoutScale) }
     var offset by remember { mutableStateOf(Offset.Zero) }
-    
-    var showInCardSlider by remember { mutableStateOf(false) }
 
     LaunchedEffect(layoutScale) {
         if (!isZooming) {
@@ -427,19 +419,14 @@ fun DynamicRatioMediaCard(
         }
     }
 
-    val isFullLine = layoutScale > 1.2f || (item.isWide && displayColumns > 1)
-    val widthMultiplier = if (isFullLine && displayColumns > 1) displayColumns.toFloat() else 1f
-    val targetRatio = ((item.ratio * widthMultiplier) / layoutScale).coerceIn(0.2f, 5f)
-
     Card(
         modifier = Modifier
             .fillMaxSize() 
-            .zIndex(if (isZooming || showInCardSlider) 1f else 0f)
+            .zIndex(if (isZooming) 1f else 0f)
             .pointerInput(Unit) {
                 detectTwoFingerGesture(
                     onGestureStart = { 
                         isZooming = true
-                        showInCardSlider = false
                     },
                     onGesture = { pan, zoom ->
                         visualScale = (visualScale * zoom).coerceIn(0.5f, 4f)
@@ -502,35 +489,6 @@ fun DynamicRatioMediaCard(
                     fontSize = 8.sp, 
                     modifier = Modifier.padding(horizontal = 4.dp)
                 )
-            }
-
-            if (isCustomTab) {
-                IconButton(
-                    onClick = { showInCardSlider = !showInCardSlider },
-                    modifier = Modifier.align(Alignment.TopStart)
-                ) {
-                    Icon(Icons.Default.Tune, "정밀 조절", tint = Color.White.copy(alpha = 0.8f))
-                }
-
-                if (showInCardSlider) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .background(Color.Black.copy(alpha = 0.6f))
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                            .padding(bottom = 20.dp)
-                    ) {
-                        Slider(
-                            value = visualScale,
-                            onValueChange = { 
-                                visualScale = it 
-                                onScaleChange(it) 
-                            },
-                            valueRange = 0.5f..4f
-                        )
-                    }
-                }
             }
         }
     }
