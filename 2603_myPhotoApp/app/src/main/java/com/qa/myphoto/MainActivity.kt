@@ -4,7 +4,6 @@ package com.qa.myphoto
 import android.Manifest
 import android.content.ContentUris
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.view.WindowManager
@@ -56,13 +55,12 @@ data class GalleryMedia(
     val isOnline: Boolean,
     val ratio: Float,
     val resolutionText: String,
-    val spanWeight: Int = 1
+    val isWide: Boolean = false // 가로 2칸 점유 여부
 )
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 화면 꺼짐 방지
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val initialTabName = intent.getStringExtra("tab_name") ?: "전체"
@@ -88,12 +86,7 @@ fun PermissionCheck(content: @Composable () -> Unit) {
         granted = it.values.all { g -> g }
     }
     LaunchedEffect(Unit) {
-        val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
-        } else {
-            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
-        launcher.launch(perms)
+        launcher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO))
     }
     if (granted) content() else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
 }
@@ -103,72 +96,40 @@ fun PermissionCheck(content: @Composable () -> Unit) {
 fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean, initialZoom: Int) {
     val context = LocalContext.current
     val tabs = listOf("전체", "사진", "동영상", "단말", "온라인")
-    
-    // Memory Cache 설정 최적화로 Crash 방지
-    val videoImageLoader = remember {
-        ImageLoader.Builder(context)
-            .components { add(VideoFrameDecoder.Factory()) }
-            .crossfade(true)
-            .build()
-    }
-
+    val videoImageLoader = remember { ImageLoader.Builder(context).components { add(VideoFrameDecoder.Factory()) }.build() }
     val pagerState = rememberPagerState(initialPage = tabs.indexOf(initialTab).coerceAtLeast(0), pageCount = { tabs.size })
     val scope = rememberCoroutineScope()
     var isAutoScrollEnabled by remember { mutableStateOf(initialAutoScroll) }
     val totalMedia = remember { mutableStateListOf<GalleryMedia>() }
 
     LaunchedEffect(Unit) {
-        // 로컬 미디어 로드
         launch(Dispatchers.IO) {
             val localItems = mutableListOf<GalleryMedia>()
-            val projection = arrayOf(
-                MediaStore.MediaColumns._ID,
-                MediaStore.MediaColumns.MIME_TYPE,
-                MediaStore.MediaColumns.WIDTH,
-                MediaStore.MediaColumns.HEIGHT
-            )
-            
-            try {
-                context.contentResolver.query(
-                    MediaStore.Files.getContentUri("external"),
-                    projection, null, null, null
-                )?.use { cursor ->
-                    val idCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-                    val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
-                    val wCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.WIDTH)
-                    val hCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.HEIGHT)
+            val projection = arrayOf(MediaStore.MediaColumns._ID, MediaColumns.MIME_TYPE, MediaColumns.WIDTH, MediaColumns.HEIGHT)
+            context.contentResolver.query(MediaStore.Files.getContentUri("external"), projection, null, null, null)?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+                val wCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.WIDTH)
+                val hCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.HEIGHT)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idCol)
+                    val w = cursor.getInt(wCol).coerceAtLeast(1)
+                    val h = cursor.getInt(hCol).coerceAtLeast(1)
+                    val ratio = w.toFloat() / h
+                    val isVideo = (cursor.getString(mimeCol) ?: "").startsWith("video")
+                    val uri = ContentUris.withAppendedId(if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
                     
-                    while (cursor.moveToNext()) {
-                        val id = cursor.getLong(idCol)
-                        val w = cursor.getInt(wCol).coerceAtLeast(1)
-                        val h = cursor.getInt(hCol).coerceAtLeast(1)
-                        val mime = cursor.getString(mimeCol) ?: ""
-                        val isVideo = mime.startsWith("video")
-                        val uri = ContentUris.withAppendedId(
-                            if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI 
-                            else MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id
-                        )
-                        
-                        val ratio = w.toFloat() / h
-                        val spanWeight = if (ratio > 1.4f && id % 3 == 0L) 2 else 1
-                        localItems.add(GalleryMedia("local_$id", uri, isVideo, false, ratio, "${w}x${h}", spanWeight))
-                    }
+                    // [반영] 가로가 길거나 특정 인덱스인 경우 와이드 배치(Span 2) 할당
+                    val isWide = ratio > 1.5f || (id % 7 == 0L && ratio > 1.1f)
+                    localItems.add(GalleryMedia("local_$id", uri, isVideo, false, ratio, "${w}x${h}", isWide))
                 }
-                withContext(Dispatchers.Main) {
-                    totalMedia.addAll(localItems)
-                }
-            } catch (e: Exception) { e.printStackTrace() }
+            }
+            withContext(Dispatchers.Main) { totalMedia.addAll(localItems) }
         }
-        
-        // 온라인 미디어 로드 (네트워크 예외 대비)
         launch(Dispatchers.IO) {
             delay(1000)
-            val remoteItems = List(10) { i ->
-                GalleryMedia("online_$i", Uri.parse("https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"), true, true, 1.77f, "1920x1080", 2)
-            }
-            withContext(Dispatchers.Main) {
-                totalMedia.addAll(remoteItems)
-            }
+            val remoteItems = List(8) { i -> GalleryMedia("online_$i", Uri.parse("https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"), true, true, 1.77f, "1920x1080", true) }
+            withContext(Dispatchers.Main) { totalMedia.addAll(remoteItems) }
         }
     }
 
@@ -188,10 +149,7 @@ fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean, initialZoom: 
             }
         }
     ) { padding ->
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.padding(padding).fillMaxSize()
-        ) { pageIdx ->
+        HorizontalPager(state = pagerState, modifier = Modifier.padding(padding).fillMaxSize()) { pageIdx ->
             val filtered = remember(pageIdx, totalMedia.size) {
                 when (pageIdx) {
                     1 -> totalMedia.filter { !it.isVideo }
@@ -201,13 +159,13 @@ fun MainGalleryApp(initialTab: String, initialAutoScroll: Boolean, initialZoom: 
                     else -> totalMedia
                 }
             }
-            PersistentGaplessGrid(filtered, isAutoScrollEnabled, videoImageLoader, initialZoom)
+            ComfortableGaplessGrid(filtered, isAutoScrollEnabled, videoImageLoader, initialZoom)
         }
     }
 }
 
 @Composable
-fun PersistentGaplessGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageLoader: ImageLoader, initialColumns: Int) {
+fun ComfortableGaplessGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageLoader: ImageLoader, initialColumns: Int) {
     val gridState = rememberLazyStaggeredGridState()
     val scope = rememberCoroutineScope()
     var columnCount by remember { mutableFloatStateOf(initialColumns.toFloat()) }
@@ -215,20 +173,19 @@ fun PersistentGaplessGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageLo
     var scrollDirection by remember { mutableIntStateOf(1) }
     var manualPlayId by remember { mutableStateOf<String?>(null) }
 
-    // 자동 스크롤 로직 (안전한 스크롤)
+    // 자동 왕복 스크롤
     LaunchedEffect(isEnabled, scrollDirection) {
         if (isEnabled) {
             while (isActive) {
                 if (scrollDirection == 1 && !gridState.canScrollForward) scrollDirection = -1
                 else if (scrollDirection == -1 && !gridState.canScrollBackward) scrollDirection = 1
-                
                 gridState.scrollBy(2.5f * scrollDirection)
                 delay(16)
             }
         }
     }
 
-    // 중앙 가시성 비디오 자동 재생 감지
+    // [반영] 스크롤 중 화면에 완전히 보이는 비디오 자동 재생
     val activeVideoId by remember {
         derivedStateOf {
             val layoutInfo = gridState.layoutInfo
@@ -257,21 +214,20 @@ fun PersistentGaplessGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageLo
             horizontalArrangement = Arrangement.spacedBy(1.dp)
         ) {
             items(items, key = { it.id }, span = { item ->
-                if (item.spanWeight > 1 && displayColumns >= 2) StaggeredGridItemSpan.FullLine else StaggeredGridItemSpan.SingleLane
+                // [반영] 가로 크기 다양화: 와이드 파일이면서 현재 칸 수가 2개 이상일 때 2칸 차지
+                if (item.isWide && displayColumns > 1) StaggeredGridItemSpan.FullLine else StaggeredGridItemSpan.SingleLane
             }) { item ->
                 val isPlaying = item.id == manualPlayId || (manualPlayId == null && item.id == activeVideoId)
-                ComfortableMediaCard(item, isPlaying, imageLoader) {
+                ComfortableCard(item, isPlaying, imageLoader) {
                     manualPlayId = if (manualPlayId == item.id) null else item.id
                 }
             }
         }
 
         // 퀵 버튼
-        Column(modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (gridState.firstVisibleItemIndex > 0) {
-                FloatingActionButton(onClick = { scope.launch { gridState.animateScrollToItem(0) } }, modifier = Modifier.size(44.dp)) {
-                    Icon(Icons.Default.ArrowUpward, null)
-                }
+        if (gridState.firstVisibleItemIndex > 2) {
+            FloatingActionButton(onClick = { scope.launch { gridState.animateScrollToItem(0) } }, modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).size(44.dp)) {
+                Icon(Icons.Default.ArrowUpward, null)
             }
         }
     }
@@ -279,20 +235,16 @@ fun PersistentGaplessGrid(items: List<GalleryMedia>, isEnabled: Boolean, imageLo
 
 @OptIn(UnstableApi::class)
 @Composable
-fun ComfortableMediaCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: ImageLoader, onPlayClick: () -> Unit) {
+fun ComfortableCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: ImageLoader, onPlayClick: () -> Unit) {
     val context = LocalContext.current
+    // RectangleShape로 촘촘하게 맞춤
     Card(modifier = Modifier.fillMaxWidth().wrapContentHeight(), shape = RectangleShape) {
         Box(modifier = Modifier.aspectRatio(item.ratio), contentAlignment = Alignment.Center) {
             if (item.isVideo && isPlaying) {
                 VideoPlayerCore(item.uri)
             } else {
                 AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(item.uri)
-                        .memoryCachePolicy(CachePolicy.ENABLED)
-                        .diskCachePolicy(CachePolicy.ENABLED)
-                        .crossfade(true)
-                        .build(),
+                    model = ImageRequest.Builder(context).data(item.uri).memoryCachePolicy(CachePolicy.ENABLED).crossfade(true).build(),
                     imageLoader = imageLoader,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
@@ -303,9 +255,11 @@ fun ComfortableMediaCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: Im
                     IconButton(onClick = onPlayClick) { Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(32.dp)) }
                 }
             }
+            // 해상도 표시
             Surface(color = Color.Black.copy(alpha = 0.4f), modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)) {
                 Text(text = item.resolutionText, color = Color.White, fontSize = 7.sp, modifier = Modifier.padding(horizontal = 3.dp))
             }
+            // 온라인 전용 배지
             if (item.isOnline) {
                 Surface(color = MaterialTheme.colorScheme.primary.copy(0.8f), modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)) {
                     Text(text = "온라인", color = Color.White, fontSize = 7.sp, modifier = Modifier.padding(horizontal = 4.dp))
@@ -319,7 +273,6 @@ fun ComfortableMediaCard(item: GalleryMedia, isPlaying: Boolean, imageLoader: Im
 @Composable
 fun VideoPlayerCore(uri: Uri) {
     val context = LocalContext.current
-    // remember를 사용하여 컴포지션 시에만 유지하고, DisposableEffect에서 확실히 해제
     val exoPlayer = remember(uri) {
         ExoPlayer.Builder(context).build().apply {
             setMediaItem(MediaItem.fromUri(uri))
@@ -329,14 +282,7 @@ fun VideoPlayerCore(uri: Uri) {
             playWhenReady = true
         }
     }
-
-    DisposableEffect(uri) {
-        onDispose {
-            exoPlayer.stop()
-            exoPlayer.release()
-        }
-    }
-
+    DisposableEffect(uri) { onDispose { exoPlayer.release() } }
     AndroidView(
         factory = { ctx ->
             PlayerView(ctx).apply {
