@@ -120,7 +120,6 @@ fun PermissionCheckAPI34(content: @Composable () -> Unit) {
 @Composable
 fun MainGalleryApp() {
     val context = LocalContext.current
-    // [요구사항 5] 커스텀 탭 추가
     val tabs = listOf("전체", "사진", "동영상", "커스텀")
     
     val videoImageLoader = remember { 
@@ -186,7 +185,6 @@ fun MainGalleryApp() {
                     }
                 }
                 Row(modifier = Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                    // [요구사항 2] 리셋 버튼: 스케일만 초기화하고, 현재 레벨(단수)은 유지
                     IconButton(onClick = { 
                         itemScales.clear() 
                     }) { 
@@ -201,7 +199,6 @@ fun MainGalleryApp() {
                     
                     Spacer(modifier = Modifier.weight(1f))
                     
-                    // [요구사항 1] 버튼 문자열 자동 반영 (isAutoScrollEnabled 상태에 따라 즉각 변경)
                     Button(onClick = { isAutoScrollEnabled = !isAutoScrollEnabled }) {
                         Text(if (isAutoScrollEnabled) "자동 스크롤 중지" else "자동 스크롤 시작")
                     }
@@ -217,7 +214,7 @@ fun MainGalleryApp() {
                 when (pageIdx) {
                     1 -> totalMedia.filter { !it.isVideo }
                     2 -> totalMedia.filter { it.isVideo }
-                    3 -> totalMedia.filter { it.isVideo } // 커스텀 탭도 비디오 필터 적용
+                    3 -> totalMedia.filter { it.isVideo }
                     else -> totalMedia
                 }
             }
@@ -229,7 +226,7 @@ fun MainGalleryApp() {
                 isAutoScroll = isAutoScrollEnabled,
                 onManualInteraction = { isAutoScrollEnabled = false },
                 imageLoader = videoImageLoader,
-                isCustomTab = pageIdx == 3 // 커스텀 탭 여부 전달
+                isCustomTab = pageIdx == 3
             )
         }
     }
@@ -298,7 +295,7 @@ fun OptimalReflowGrid(
                 key = { it.id },
                 span = { item ->
                     val scale = itemScales[item.id] ?: 1f
-                    if (scale > 1.2f || (item.isWide && displayColumns > 1) || isCustomTab && activeVideoId == item.id) {
+                    if (scale > 1.2f || (item.isWide && displayColumns > 1) || (isCustomTab && activeVideoId == item.id)) {
                         StaggeredGridItemSpan.FullLine 
                     } else {
                         StaggeredGridItemSpan.SingleLane 
@@ -320,7 +317,6 @@ fun OptimalReflowGrid(
             }
         }
 
-        // 퀵 이동 버튼
         Column(
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -337,7 +333,6 @@ fun OptimalReflowGrid(
             }
         }
 
-        // [요구사항 5] 커스텀 탭 전용: 동영상 선택 시 하단에 정밀 스케일 슬라이더 패널 고정
         if (isCustomTab && activeVideoId != null) {
             val scale = itemScales[activeVideoId] ?: 1f
             Column(
@@ -382,7 +377,6 @@ fun DynamicRatioMediaCard(
     var visualScale by remember { mutableFloatStateOf(layoutScale) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     
-    // [요구사항 3] 개별 카드 정밀 줌 슬라이더 토글 상태
     var showInCardSlider by remember { mutableStateOf(false) }
 
     LaunchedEffect(layoutScale) {
@@ -405,7 +399,7 @@ fun DynamicRatioMediaCard(
                 detectTwoFingerGesture(
                     onGestureStart = { 
                         isZooming = true
-                        showInCardSlider = false // 제스처 시작 시 슬라이더 숨김
+                        showInCardSlider = false
                     },
                     onGesture = { pan, zoom ->
                         visualScale = (visualScale * zoom).coerceIn(0.5f, 4f)
@@ -450,7 +444,6 @@ fun DynamicRatioMediaCard(
                         Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(48.dp)) 
                     }
                 }
-                // [요구사항 4] 동영상 여부 아이콘 항상 표시
                 Icon(
                     Icons.Default.VideoCameraBack, 
                     contentDescription = null, 
@@ -459,7 +452,6 @@ fun DynamicRatioMediaCard(
                 )
             }
             
-            // [요구사항 4] 해상도 정보 항상 표시 (isZooming 무관하게)
             Surface(
                 color = Color.Black.copy(alpha = 0.5f), 
                 modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)
@@ -472,7 +464,6 @@ fun DynamicRatioMediaCard(
                 )
             }
 
-            // [요구사항 3] 개별 정밀 컨트롤을 위한 튠(Tune) 버튼
             IconButton(
                 onClick = { showInCardSlider = !showInCardSlider },
                 modifier = Modifier.align(Alignment.TopStart)
@@ -480,7 +471,6 @@ fun DynamicRatioMediaCard(
                 Icon(Icons.Default.Tune, "정밀 조절", tint = Color.White.copy(alpha = 0.8f))
             }
 
-            // 튠 버튼을 눌렀을 때 나타나는 개별 정밀 조절 슬라이더
             if (showInCardSlider) {
                 Box(
                     modifier = Modifier
@@ -488,13 +478,13 @@ fun DynamicRatioMediaCard(
                         .fillMaxWidth()
                         .background(Color.Black.copy(alpha = 0.6f))
                         .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .padding(bottom = 20.dp) // 해상도 텍스트와 겹치지 않게 띄움
+                        .padding(bottom = 20.dp)
                 ) {
                     Slider(
                         value = visualScale,
                         onValueChange = { 
                             visualScale = it 
-                            onScaleChange(it) // 드래그 할 때마다 실시간으로 레이아웃에 반영
+                            onScaleChange(it) 
                         },
                         valueRange = 0.5f..4f
                     )
