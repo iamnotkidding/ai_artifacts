@@ -1,6 +1,7 @@
 package com.qa.myphoto
 
 
+
 import android.Manifest
 import android.content.ContentUris
 import android.net.Uri
@@ -193,7 +194,6 @@ fun MainGalleryApp() {
                     
                     Spacer(modifier = Modifier.width(8.dp))
                     
-                    // 레이아웃 레벨 최대 10단까지 열어둠
                     IconButton(onClick = { if (columnCount < 10) columnCount++ }) { Icon(Icons.Default.Remove, "작게") }
                     Text("${columnCount}단 뷰", fontSize = 16.sp, modifier = Modifier.padding(horizontal = 8.dp))
                     IconButton(onClick = { if (columnCount > 1) columnCount-- }) { Icon(Icons.Default.Add, "크게") }
@@ -252,19 +252,17 @@ fun OptimalReflowGrid(
     val screenWidthDp = configuration.screenWidthDp.toFloat()
     val screenHeightDp = configuration.screenHeightDp.toFloat()
 
-    // [핵심] 유동적 줄바꿈(Flow Wrap) 및 빈 공간 테트리스 100% 채우기 알고리즘
+    // [수정] 변수 누락 해결: GridCells.Fixed 와 span 계산에서 공통으로 사용할 변수 선언
+    val totalGridCells = 2520 
+
     val (itemSpans, itemHeights, isMinSizeFlags) = remember(items, displayColumns, itemScales.toMap(), screenWidthDp, screenHeightDp) {
         if (items.isEmpty()) return@remember Triple(IntArray(0), FloatArray(0), BooleanArray(0))
 
-        val TOTAL_SPANS = 2520 // 모든 정수비율을 소화하기 위한 공배수 
         val spans = IntArray(items.size)
         val heights = FloatArray(items.size)
         val minSizeFlags = BooleanArray(items.size)
 
-        // [요구사항 1] 전체 디바이스 화면 가로/세로 중 가장 큰 값의 1/5을 절대 최소 한계선(dp)으로 설정
         val minDimensionDp = maxOf(screenWidthDp, screenHeightDp) / 5f
-        
-        // 논리적 계산을 위한 단위 환산
         val minLogicalWidthUnit = (minDimensionDp / screenWidthDp) * displayColumns
 
         var i = 0
@@ -277,13 +275,10 @@ fun OptimalReflowGrid(
                 val item = items[j]
                 val scale = itemScales[item.id] ?: 1f
 
-                // 유저가 설정한 고유 비율과 줌 스케일
                 val originalLw = item.ratio * scale
-                // [요구사항 1] 절대 최소 한계선에 부딪히면 그 밑으로는 내려가지 못하게 강제 방어
                 val requiredMinLw = minLogicalWidthUnit * maxOf(1f, item.ratio)
                 val lw = maxOf(originalLw, requiredMinLw)
 
-                // [요구사항 3] 이번 파일을 넣었을 때 줄 가로 한계치(displayColumns)를 넘는다면 줄바꿈(Wrap) 발생
                 if (rowIndices.isNotEmpty() && (currentRowLogicalWidth + lw) > displayColumns) {
                     break
                 }
@@ -291,10 +286,8 @@ fun OptimalReflowGrid(
                 rowIndices.add(j)
                 currentRowLogicalWidth += lw
                 
-                // [요구사항 3] 파일 크기가 절대 최소 크기에 도달했는지 판별(아이콘 숨김용 플래그)
                 minSizeFlags[j] = originalLw <= requiredMinLw + 0.01f
 
-                // 한 파일 자체가 너무 거대해서 이미 줄을 넘어선 경우 강제 줄바꿈
                 if (currentRowLogicalWidth >= displayColumns) {
                     j++
                     break
@@ -302,7 +295,6 @@ fun OptimalReflowGrid(
                 j++
             }
 
-            // --- 줄 묶음(Row) 확정 후 오른쪽/하단 100% 빈틈 채우기 연산 ---
             val sumLw = rowIndices.sumOf { k ->
                 val scale = itemScales[items[k].id] ?: 1f
                 val requiredMinLw = minLogicalWidthUnit * maxOf(1f, items[k].ratio)
@@ -318,17 +310,15 @@ fun OptimalReflowGrid(
                 val requiredMinLw = minLogicalWidthUnit * maxOf(1f, items[k].ratio)
                 val lw = maxOf(items[k].ratio * scale, requiredMinLw)
 
-                // [요구사항 2] 가로 오른쪽 끝 빈공간을 강제로 채우기 위해 마지막 파일이 남은 Spans 전부 흡수
                 val span = if (idx == rowIndices.lastIndex) {
-                    TOTAL_SPANS - allocatedSpans
+                    totalGridCells - allocatedSpans
                 } else {
-                    (TOTAL_SPANS * (lw / sumLw)).toInt()
+                    (totalGridCells * (lw / sumLw)).toInt()
                 }
                 spans[k] = span
                 allocatedSpans += span
 
-                // 할당된 가로폭(Span) 기반으로 비율을 지키기 위한 최적의 세로 높이 계산
-                val itemWidthDp = screenWidthDp * (span.toFloat() / TOTAL_SPANS)
+                val itemWidthDp = screenWidthDp * (span.toFloat() / totalGridCells)
                 val itemHeightDp = itemWidthDp / items[k].ratio
 
                 if (itemHeightDp > maxRowHeightDp) {
@@ -336,7 +326,6 @@ fun OptimalReflowGrid(
                 }
             }
 
-            // [요구사항 2] 세로 하단 빈공간을 강제로 덮기 위해 같은 줄의 모든 파일 높이를 Max로 통일 (Crop 됨)
             for (k in rowIndices) {
                 heights[k] = maxRowHeightDp
             }
@@ -380,7 +369,6 @@ fun OptimalReflowGrid(
         }
     }
 
-    // 파일 경계색 배경 지정 (White)
     Box(modifier = Modifier.fillMaxSize().background(Color.White)) {
         LazyVerticalGrid(
             state = gridState,
@@ -401,7 +389,6 @@ fun OptimalReflowGrid(
                 val isPlaying = item.id == activeVideoId || (activeVideoId == null && item.id == centerVideoId)
                 val itemScale = itemScales[item.id] ?: 1f
                 
-                // 물리적 높이가 이미 빈 공간 100% 채움 연산으로 계산되어 넘어옵니다.
                 val layoutHeightDp = if (index < itemHeights.size) itemHeights[index] else 200f
                 val isAtMinSize = if (index < isMinSizeFlags.size) isMinSizeFlags[index] else false
                 
@@ -410,7 +397,7 @@ fun OptimalReflowGrid(
                         item = item,
                         isPlaying = isPlaying,
                         itemScale = itemScale,     
-                        isAtMinSize = isAtMinSize, // 최소 크기 도달 여부 주입
+                        isAtMinSize = isAtMinSize, 
                         onScaleChange = { newScale -> itemScales[item.id] = newScale },
                         imageLoader = imageLoader,
                         onPlayToggle = { activeVideoId = if (activeVideoId == item.id) null else item.id }
@@ -435,7 +422,6 @@ fun OptimalReflowGrid(
             }
         }
 
-        // [요구사항 4] 커스텀 조절바는 커스텀 탭 + 선택/재생 중인 영상이 있으면 항상 보이게 유지
         val activeControlVideoId = activeVideoId ?: centerVideoId
         if (isCustomTab && activeControlVideoId != null) {
             val scale = itemScales[activeControlVideoId] ?: 1f
@@ -454,7 +440,6 @@ fun OptimalReflowGrid(
                 Slider(
                     value = scale,
                     onValueChange = { itemScales[activeControlVideoId] = it },
-                    // 최소치로 쉽게 스와이프 축소할 수 있도록 범위 한계치 0.1f 개방
                     valueRange = 0.1f..4f, 
                     colors = SliderDefaults.colors(
                         thumbColor = MaterialTheme.colorScheme.primary,
@@ -483,7 +468,6 @@ fun DynamicRatioMediaCard(
     
     var isMuted by remember { mutableStateOf(true) }
 
-    // 부모 레이아웃이 확정되면 시각 스케일 일치화
     LaunchedEffect(itemScale) {
         if (!isZooming) {
             visualScale = itemScale
@@ -500,7 +484,6 @@ fun DynamicRatioMediaCard(
                         isZooming = true
                     },
                     onGesture = { _, zoom ->
-                        // 제스처가 발생할 때마다 실시간으로 레이아웃 엔진에 크기 변화를 전달하여 실시간 Reflow 발생
                         visualScale = (visualScale * zoom).coerceIn(0.1f, 5f)
                         onScaleChange(visualScale)
                     },
@@ -512,7 +495,6 @@ fun DynamicRatioMediaCard(
         shape = RectangleShape,
         colors = CardDefaults.cardColors(containerColor = Color.White) 
     ) {
-        // 이미 100% 빈틈 채우기를 통해 할당된 부모 영역을 Crop 하여 그대로 채웁니다.
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
@@ -529,7 +511,6 @@ fun DynamicRatioMediaCard(
                 if (isPlaying) {
                     VideoPlayerCore(item.uri, isMuted)
                 } else {
-                    // [요구사항 3] 최소 크기 한계선에 도달한 아이템은 재생 버튼 숨김
                     if (!isAtMinSize) {
                         IconButton(onClick = onPlayToggle) { 
                             Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(32.dp)) 
@@ -537,7 +518,6 @@ fun DynamicRatioMediaCard(
                     }
                 }
                 
-                // [요구사항 3] 최소 크기 도달 시 음소거 버튼 숨김
                 if (!isAtMinSize) {
                     IconButton(
                         onClick = { isMuted = !isMuted },
@@ -553,7 +533,6 @@ fun DynamicRatioMediaCard(
                 }
             }
             
-            // [요구사항 3] 최소 크기 도달 시 해상도 텍스트 숨김
             if (!isAtMinSize) {
                 Box(
                     modifier = Modifier.align(Alignment.BottomStart).padding(6.dp)
